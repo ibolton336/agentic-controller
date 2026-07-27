@@ -7,7 +7,7 @@ import (
 )
 
 func TestProviderEnvAnthropic(t *testing.T) {
-	env := providerEnv("anthropic", "claude-sonnet-4-5", "sk-ant-key", "https://api.anthropic.com")
+	env, _ := providerEnv("anthropic", "claude-sonnet-4-5", "sk-ant-key", "https://api.anthropic.com")
 	assertEnvContains(t, env, "GOOSE_PROVIDER", "anthropic")
 	assertEnvContains(t, env, "GOOSE_MODEL", "claude-sonnet-4-5")
 	assertEnvContains(t, env, "ANTHROPIC_API_KEY", "sk-ant-key")
@@ -15,25 +15,25 @@ func TestProviderEnvAnthropic(t *testing.T) {
 }
 
 func TestProviderEnvOpenAI(t *testing.T) {
-	env := providerEnv("openai", "gpt-4o", "sk-openai-key", "https://api.openai.com")
+	env, _ := providerEnv("openai", "gpt-4o", "sk-openai-key", "https://api.openai.com")
 	assertEnvContains(t, env, "GOOSE_PROVIDER", "openai")
 	assertEnvContains(t, env, "OPENAI_API_KEY", "sk-openai-key")
 	assertEnvContains(t, env, "OPENAI_HOST", "https://api.openai.com")
 }
 
 func TestProviderEnvGoogle(t *testing.T) {
-	env := providerEnv("google", "gemini-2.5-pro", "google-key", "")
+	env, _ := providerEnv("google", "gemini-2.5-pro", "google-key", "")
 	assertEnvContains(t, env, "GOOGLE_API_KEY", "google-key")
 	assertEnvNotPresent(t, env, "ANTHROPIC_API_KEY")
 }
 
 func TestProviderEnvNormalizesHyphens(t *testing.T) {
-	env := providerEnv("gcp-vertex-ai", "", "", "")
+	env, _ := providerEnv("gcp-vertex-ai", "", "", "")
 	assertEnvContains(t, env, "GOOSE_PROVIDER", "gcp_vertex_ai")
 }
 
 func TestProviderEnvEmptyStringsAddNothing(t *testing.T) {
-	env := providerEnv("", "", "", "")
+	env, _ := providerEnv("", "", "", "")
 	assertEnvNotPresent(t, env, "GOOSE_PROVIDER")
 	assertEnvNotPresent(t, env, "GOOSE_MODEL")
 	assertEnvNotPresent(t, env, "ANTHROPIC_API_KEY")
@@ -41,7 +41,10 @@ func TestProviderEnvEmptyStringsAddNothing(t *testing.T) {
 
 func TestProviderEnvGCPVertexFiltersCredJSON(t *testing.T) {
 	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS_JSON", `{"type":"service_account"}`)
-	env := providerEnv("gcp-vertex-ai", "", "", "")
+	env, tempDirs := providerEnv("gcp-vertex-ai", "", "", "")
+	for _, d := range tempDirs {
+		defer os.RemoveAll(d)
+	}
 	assertEnvNotPresent(t, env, "GOOGLE_APPLICATION_CREDENTIALS_JSON")
 	assertEnvPresent(t, env, "GOOGLE_APPLICATION_CREDENTIALS")
 }
