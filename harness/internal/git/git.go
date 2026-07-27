@@ -167,18 +167,13 @@ func CommitAll(repo *gogit.Repository, message string) (plumbing.Hash, error) {
 	return hash, nil
 }
 
-// Push force-pushes the branch. Force is intentional: the watcher's
-// auto-commits may create non-fast-forward histories, and each stage
-// owns its branch exclusively. Concurrent runs on the same branch are
-// not supported.
 func Push(ctx context.Context, cred *Credentials, repo *gogit.Repository, branch string) error {
-	refSpec := gogitcfg.RefSpec(fmt.Sprintf("+refs/heads/%s:refs/heads/%s", branch, branch))
+	refSpec := gogitcfg.RefSpec(fmt.Sprintf("refs/heads/%s:refs/heads/%s", branch, branch))
 
 	err := repo.PushContext(ctx, &gogit.PushOptions{
 		Auth:       cred.Auth(),
 		RemoteName: "origin",
 		RefSpecs:   []gogitcfg.RefSpec{refSpec},
-		Force:      true,
 	})
 	if err != nil && !errors.Is(err, gogit.NoErrAlreadyUpToDate) {
 		return fmt.Errorf("push %s: %w", branch, err)

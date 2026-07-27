@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -17,30 +18,32 @@ func clearKonveyorEnv(t *testing.T) {
 		"HUB_BASE_URL",
 		"HUB_TOKEN",
 		"APP_ID",
+		"KONVEYOR_ACP_SECRET_KEY",
 	} {
 		t.Setenv(k, "")
 		os.Unsetenv(k)
 	}
 }
 
-func setHubEnv(t *testing.T) {
+func setRequiredEnv(t *testing.T) {
 	t.Helper()
+	t.Setenv("KONVEYOR_MODEL_PRIMARY_MODEL", "claude-sonnet-4-5")
+	t.Setenv("KONVEYOR_MODEL_PRIMARY_PROVIDER", "anthropic")
 	t.Setenv("HUB_BASE_URL", "https://hub.example.com")
 	t.Setenv("APP_ID", "42")
+	t.Setenv("KONVEYOR_ACP_SECRET_KEY", "test-secret-key")
 }
 
 func TestLoadFromEnv(t *testing.T) {
 	t.Run("returns config from env", func(t *testing.T) {
 		clearKonveyorEnv(t)
-		setHubEnv(t)
-		t.Setenv("KONVEYOR_MODEL_PRIMARY_MODEL", "claude-sonnet-4-5")
-		t.Setenv("KONVEYOR_MODEL_PRIMARY_PROVIDER", "anthropic")
+		setRequiredEnv(t)
 		t.Setenv("KONVEYOR_MODEL_PRIMARY_ENDPOINT", "https://api.anthropic.com")
 		t.Setenv("KONVEYOR_MODEL_PRIMARY_API_KEY", "sk-test-key")
 
-		cfg := LoadFromEnv()
-		if cfg == nil {
-			t.Fatal("expected config, got nil")
+		cfg, err := LoadFromEnv()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
 		if cfg.Model != "claude-sonnet-4-5" {
 			t.Errorf("Model = %q, want %q", cfg.Model, "claude-sonnet-4-5")
@@ -54,30 +57,46 @@ func TestLoadFromEnv(t *testing.T) {
 		if cfg.APIKey != "sk-test-key" {
 			t.Errorf("APIKey = %q, want %q", cfg.APIKey, "sk-test-key")
 		}
+		if cfg.ACPSecretKey != "test-secret-key" {
+			t.Errorf("ACPSecretKey = %q, want %q", cfg.ACPSecretKey, "test-secret-key")
+		}
 		if cfg.MaxTurns != DefaultMaxTurns {
 			t.Errorf("MaxTurns = %d, want default %d", cfg.MaxTurns, DefaultMaxTurns)
 		}
 	})
 
-	t.Run("returns nil when env not set", func(t *testing.T) {
+	t.Run("errors when env not set", func(t *testing.T) {
 		clearKonveyorEnv(t)
 
-		cfg := LoadFromEnv()
-		if cfg != nil {
-			t.Fatalf("expected nil, got %+v", cfg)
+		_, err := LoadFromEnv()
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+
+	t.Run("error names the missing var", func(t *testing.T) {
+		clearKonveyorEnv(t)
+		setRequiredEnv(t)
+		os.Unsetenv("KONVEYOR_ACP_SECRET_KEY")
+
+		_, err := LoadFromEnv()
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "KONVEYOR_ACP_SECRET_KEY") {
+			t.Errorf("error should name missing var, got: %v", err)
 		}
 	})
 
 	t.Run("reads optional param overrides", func(t *testing.T) {
-		setHubEnv(t)
-		t.Setenv("KONVEYOR_MODEL_PRIMARY_MODEL", "gemini-2.5-pro")
-		t.Setenv("KONVEYOR_MODEL_PRIMARY_PROVIDER", "gcp_vertex_ai")
+		clearKonveyorEnv(t)
+		setRequiredEnv(t)
 		t.Setenv("KONVEYOR_PARAM_MAX_TURNS", "500")
 		t.Setenv("KONVEYOR_PARAM_MAX_FIX_ITERATIONS", "7")
 
-		cfg := LoadFromEnv()
-		if cfg == nil {
-			t.Fatal("expected config, got nil")
+		cfg, err := LoadFromEnv()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
 		if cfg.MaxTurns != 500 {
 			t.Errorf("MaxTurns = %d, want 500", cfg.MaxTurns)

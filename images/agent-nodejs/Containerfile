@@ -9,6 +9,8 @@ USER root
 
 RUN dnf install -y nodejs npm && dnf clean all
 
+ENV HARNESS_SOURCE_EXTS=".js,.ts,.jsx,.tsx,.mjs,.cjs"
+
 USER harness
 
 ENTRYPOINT ["migration-harness"]

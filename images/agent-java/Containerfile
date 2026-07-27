@@ -16,6 +16,7 @@ RUN JAVA_HOME_PATH=$(dirname $(dirname $(readlink -f $(which java)))) \
     && ln -sf "$JAVA_HOME_PATH" /usr/lib/jvm/java-current
 ENV JAVA_HOME=/usr/lib/jvm/java-current
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
+ENV HARNESS_SOURCE_EXTS=".java,.gradle,.kts,.kt,.groovy"
 
 USER harness
 

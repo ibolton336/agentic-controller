@@ -12,6 +12,9 @@ type Credentials struct {
 }
 
 func (c *Credentials) Auth() *http.BasicAuth {
+	if c.Username == "" && c.Token == "" {
+		return nil
+	}
 	return &http.BasicAuth{
 		Username: c.Username,
 		Password: c.Token,

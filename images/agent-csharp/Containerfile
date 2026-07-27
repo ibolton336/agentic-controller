@@ -11,6 +11,8 @@ RUN dnf install -y \
     dotnet-sdk-8.0 \
     && dnf clean all
 
+ENV HARNESS_SOURCE_EXTS=".cs,.csproj,.sln,.razor"
+
 USER harness
 
 ENTRYPOINT ["migration-harness"]

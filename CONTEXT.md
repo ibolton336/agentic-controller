@@ -168,11 +168,11 @@ via `KONVEYOR_WORKFLOW_STAGE` / `KONVEYOR_WORKFLOW_STAGE_COUNT` env
 vars injected by the controller). In standalone mode
 (no `HUB_BASE_URL`), the harness reads git coordinates from
 `KONVEYOR_PARAM_*` env vars and credentials from mounted Secrets. In
-both modes, the harness launches the agent runtime, commits work
-incrementally, and pushes to the target branch on exit. The harness
-is domain-specific — other platforms can provide their own harness
-for their use case. The controller is agnostic to which harness the
-base image carries.
+both modes, the harness launches the agent runtime and pushes to the
+target branch on exit. The agent commits locally; the harness pushes.
+The harness is domain-specific — other platforms can provide their
+own harness for their use case. The controller is agnostic to which
+harness the base image carries.
 
 **Memory Service** — A persistent, queryable knowledge base owned by
 an Agent, accessible via MCP. The agent reads from it at session

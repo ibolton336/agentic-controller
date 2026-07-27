@@ -12,8 +12,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	gogit "github.com/go-git/go-git/v5"
-
 	"github.com/konveyor/migration-harness/internal/acp"
 	"github.com/konveyor/migration-harness/internal/config"
 	"github.com/konveyor/migration-harness/internal/git"
@@ -49,9 +47,9 @@ func runStage(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	// 1. Load config from env
-	cfg := config.LoadFromEnv()
-	if cfg == nil {
-		return fmt.Errorf("required env vars: KONVEYOR_MODEL_PRIMARY_MODEL, KONVEYOR_MODEL_PRIMARY_PROVIDER, HUB_BASE_URL, APP_ID")
+	cfg, err := config.LoadFromEnv()
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
 	}
 
 	// 2. Resolve app info + git creds from Hub
@@ -67,8 +65,8 @@ func runStage(cmd *cobra.Command, args []string) error {
 
 	// Controller must set the target branch — Hub branch is the source, not the push target.
 	targetBranch := os.Getenv("TARGET_BRANCH")
-	if targetBranch == "" {
-		return fmt.Errorf("TARGET_BRANCH is required")
+	if err := validateTargetBranch(targetBranch, creds.Branch); err != nil {
+		return err
 	}
 	creds.Branch = targetBranch
 
@@ -100,7 +98,7 @@ func runStage(cmd *cobra.Command, args []string) error {
 
 	// 4. Start goose serve
 	logging.Header("Goose Setup")
-	srv, err := goose.StartServe(ctx, 0, cfg.Provider, cfg.Model, cfg.APIKey, cfg.Endpoint)
+	srv, err := goose.StartServe(ctx, 0, cfg.ACPSecretKey, cfg.Provider, cfg.Model, cfg.APIKey, cfg.Endpoint)
 	if err != nil {
 		return fmt.Errorf("start goose serve: %w", err)
 	}
@@ -120,7 +118,7 @@ func runStage(cmd *cobra.Command, args []string) error {
 	}
 
 	// 6. Discover skills
-	skillContent, skillPaths, err := discoverSkills()
+	skillContent, _, err := discoverSkills()
 	if err != nil {
 		return fmt.Errorf("discover skills: %w", err)
 	}
@@ -165,22 +163,16 @@ func runStage(cmd *cobra.Command, args []string) error {
 	// 11. Determine exit status from ACP/goose signals
 	stageFailed := err != nil || !srv.Alive()
 
-	status := "succeeded"
-	if stageFailed {
-		status = "failed"
-	}
-
-	// 11b. Write handoff.md for next stage
-	if err := writeHandoff(cloneDir, skillPaths, status, repo); err != nil {
-		logging.Warn("handoff: %v", err)
-	}
-
-	// 12. Final commit + push
+	// 12. Final commit + push (use a fresh context — the signal context
+	// may already be cancelled after SIGINT, and we must not lose the
+	// last commit)
 	logging.Header("Final Push")
+	pushCtx, pushCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer pushCancel()
 	if _, err := git.CommitAll(repo, "konveyor: stage complete"); err != nil {
 		logging.Warn("final commit: %v", err)
 	}
-	if err := git.Push(ctx, creds, repo, creds.Branch); err != nil {
+	if err := git.Push(pushCtx, creds, repo, creds.Branch); err != nil {
 		return fmt.Errorf("final push: %w", err)
 	}
 
@@ -253,44 +245,7 @@ func buildPrompt(skillContent string) string {
 	return b.String()
 }
 
-func skillName(path string) string {
-	return filepath.Base(filepath.Dir(path))
-}
 
-func writeHandoff(workDir string, skills []string, status string, repo *gogit.Repository) error {
-	handoffPath := filepath.Join(workDir, ".konveyor", "handoff.md")
-	if err := os.MkdirAll(filepath.Dir(handoffPath), 0o755); err != nil {
-		return fmt.Errorf("create .konveyor dir: %w", err)
-	}
-
-	existing, _ := os.ReadFile(handoffPath)
-
-	var b strings.Builder
-
-	if len(existing) > 0 {
-		b.Write(existing)
-		b.WriteString("\n---\n\n")
-	}
-
-	fmt.Fprintf(&b, "**Status:** %s  \n", status)
-	fmt.Fprintf(&b, "**Completed:** %s\n", time.Now().UTC().Format(time.RFC3339))
-
-	b.WriteString("\n### Skills\n\n")
-	for _, s := range skills {
-		fmt.Fprintf(&b, "- %s\n", skillName(s))
-	}
-
-	if n := changedFileCount(repo); n > 0 {
-		fmt.Fprintf(&b, "\n**Files changed:** %d\n", n)
-	}
-
-	if err := os.WriteFile(handoffPath, []byte(b.String()), 0o644); err != nil {
-		return fmt.Errorf("write handoff.md: %w", err)
-	}
-
-	logging.Ok("wrote %s", handoffPath)
-	return nil
-}
 
 func resolveFromHub(cfg *config.Config) (*git.Credentials, *hub.Client, error) {
 	logging.Header("Hub Resolution")
@@ -359,30 +314,14 @@ func fetchAndWriteAnalysis(hubClient *hub.Client, appIDStr string, workDir strin
 	return nil
 }
 
-var excludeDirs = []string{"graphify-out/", ".konveyor/", "target/", ".git/"}
-
-func changedFileCount(repo *gogit.Repository) int {
-	wt, err := repo.Worktree()
-	if err != nil {
-		return 0
+func validateTargetBranch(target, source string) error {
+	if target == "" {
+		return fmt.Errorf("TARGET_BRANCH is required")
 	}
-	status, err := wt.Status()
-	if err != nil {
-		return 0
+	if target == source {
+		return fmt.Errorf("TARGET_BRANCH %q must differ from source branch", target)
 	}
-	n := 0
-	for path := range status {
-		excluded := false
-		for _, prefix := range excludeDirs {
-			if strings.HasPrefix(path, prefix) {
-				excluded = true
-				break
-			}
-		}
-		if !excluded {
-			n++
-		}
-	}
-	return n
+	return nil
 }
+
 
