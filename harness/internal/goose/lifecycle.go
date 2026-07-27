@@ -19,7 +19,8 @@ type ServeProcess struct {
 	cmd       *exec.Cmd
 	port      int
 	secretKey string
-	done chan struct{}
+	done     chan struct{}
+	tempDirs []string
 }
 
 const (
@@ -48,7 +49,7 @@ func StartServe(ctx context.Context, port int, secretKey, provider, model, apiKe
 		"--port", fmt.Sprintf("%d", port),
 		"--with-builtin", "developer",
 	)
-	env := providerEnv(provider, model, apiKey, endpoint)
+	env, tempDirs := providerEnv(provider, model, apiKey, endpoint)
 	if secretKey != "" {
 		env = append(env, "GOOSE_SERVER__SECRET_KEY="+secretKey)
 	}
@@ -57,6 +58,9 @@ func StartServe(ctx context.Context, port int, secretKey, provider, model, apiKe
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
+		for _, d := range tempDirs {
+			os.RemoveAll(d)
+		}
 		return nil, fmt.Errorf("start goose serve: %w", err)
 	}
 
@@ -64,7 +68,8 @@ func StartServe(ctx context.Context, port int, secretKey, provider, model, apiKe
 		cmd:       cmd,
 		port:      port,
 		secretKey: secretKey,
-		done: make(chan struct{}),
+		done:     make(chan struct{}),
+		tempDirs: tempDirs,
 	}
 
 	go func() {
@@ -97,7 +102,10 @@ func (s *ServeProcess) Alive() bool {
 }
 
 // Stop sends SIGTERM and waits up to 5 seconds, then SIGKILL.
+// Cleans up any temporary credential files created during startup.
 func (s *ServeProcess) Stop() error {
+	defer s.cleanup()
+
 	if !s.Alive() {
 		return nil
 	}
@@ -120,6 +128,13 @@ func (s *ServeProcess) Stop() error {
 	}
 }
 
+func (s *ServeProcess) cleanup() {
+	for _, d := range s.tempDirs {
+		os.RemoveAll(d)
+	}
+	s.tempDirs = nil
+}
+
 // FindFreePort returns an available TCP port.
 func FindFreePort() (int, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -136,8 +151,8 @@ func FindFreePort() (int, error) {
 // starting goose serve so the process has the right credentials at
 // startup. In a Sandbox, the controller injects KONVEYOR_MODEL_PRIMARY_*
 // env vars; this function maps them to provider-specific names.
-func providerEnv(provider, model, apiKey, endpoint string) []string {
-	env := os.Environ()
+func providerEnv(provider, model, apiKey, endpoint string) (env []string, tempDirs []string) {
+	env = os.Environ()
 	p := strings.ReplaceAll(strings.ToLower(provider), "-", "_")
 
 	if p != "" {
@@ -166,6 +181,7 @@ func providerEnv(provider, model, apiKey, endpoint string) []string {
 				logging.Warn("write ADC file: %v", err)
 			} else {
 				env = append(env, "GOOGLE_APPLICATION_CREDENTIALS="+path)
+				tempDirs = append(tempDirs, filepath.Dir(path))
 			}
 			env = filterEnvKey(env, "GOOGLE_APPLICATION_CREDENTIALS_JSON")
 		}
@@ -180,7 +196,7 @@ func providerEnv(provider, model, apiKey, endpoint string) []string {
 		}
 	}
 
-	return env
+	return env, tempDirs
 }
 
 func filterEnvKey(env []string, key string) []string {

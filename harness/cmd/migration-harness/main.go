@@ -170,7 +170,7 @@ func runStage(cmd *cobra.Command, args []string) error {
 	pushCtx, pushCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer pushCancel()
 	if _, err := git.CommitAll(repo, "konveyor: stage complete"); err != nil {
-		logging.Warn("final commit: %v", err)
+		return fmt.Errorf("final commit: %w", err)
 	}
 	if err := git.Push(pushCtx, creds, repo, creds.Branch); err != nil {
 		return fmt.Errorf("final push: %w", err)

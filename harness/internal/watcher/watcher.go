@@ -93,10 +93,8 @@ func (w *Watcher) loop(ctx context.Context) {
 			}
 			if event.Op&fsnotify.Create != 0 {
 				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
-					// Only add the directory if it's not excluded
-					dirName := filepath.Base(event.Name)
-					if !excludeDirs[dirName] {
-						w.fsw.Add(event.Name)
+					if err := w.addDirRecursive(event.Name); err != nil {
+						logging.Warn("watch new directory %s: %v", event.Name, err)
 					}
 				}
 			}
