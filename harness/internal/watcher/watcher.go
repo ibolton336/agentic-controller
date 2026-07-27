@@ -2,9 +2,7 @@ package watcher
 
 import (
 	"context"
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -97,7 +95,7 @@ func (w *Watcher) loop(ctx context.Context) {
 				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
 					// Only add the directory if it's not excluded
 					dirName := filepath.Base(event.Name)
-					if !excludeDirs[dirName] && dirName != ".konveyor" {
+					if !excludeDirs[dirName] {
 						w.fsw.Add(event.Name)
 					}
 				}
@@ -133,48 +131,9 @@ func isRelevantChange(relPath string) bool {
 }
 
 func (w *Watcher) doCommit() {
-	if err := w.stageFiles(); err != nil {
-		logging.Warn("watcher stage: %v", err)
-		return
-	}
 	if err := w.commitFn(); err != nil {
 		logging.Warn("watcher commit+push: %v", err)
 	}
-}
-
-func (w *Watcher) stageFiles() error {
-	cmd := exec.Command("git", "-C", w.dir, "add", "-u")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git add -u: %s: %w", out, err)
-	}
-
-	entries, err := w.findNewFiles()
-	if err != nil {
-		return err
-	}
-	for _, f := range entries {
-		cmd := exec.Command("git", "-C", w.dir, "add", "--", f)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			logging.Warn("git add %s: %s", f, out)
-		}
-	}
-	return nil
-}
-
-func (w *Watcher) findNewFiles() ([]string, error) {
-	cmd := exec.Command("git", "-C", w.dir, "ls-files", "--others", "--exclude-standard")
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, err
-	}
-	var staged []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" && ShouldStageNewFile(line) {
-			staged = append(staged, line)
-		}
-	}
-	return staged, nil
 }
 
 func (w *Watcher) addDirRecursive(dir string) error {
@@ -184,7 +143,7 @@ func (w *Watcher) addDirRecursive(dir string) error {
 		}
 		if d.IsDir() {
 			name := d.Name()
-			if excludeDirs[name] || name == ".konveyor" {
+			if excludeDirs[name] {
 				return filepath.SkipDir
 			}
 			return w.fsw.Add(path)

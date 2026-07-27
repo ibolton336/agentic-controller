@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 )
@@ -18,25 +19,37 @@ type Config struct {
 	MaxTurns         int
 	MaxFixIterations int
 
-	HubBaseURL string
-	HubToken   string
-	AppID      string
+	HubBaseURL   string
+	HubToken     string
+	AppID        string
+	ACPSecretKey string
 }
 
-func LoadFromEnv() *Config {
-	model := os.Getenv("KONVEYOR_MODEL_PRIMARY_MODEL")
-	provider := os.Getenv("KONVEYOR_MODEL_PRIMARY_PROVIDER")
-	if model == "" || provider == "" {
-		return nil
+func LoadFromEnv() (*Config, error) {
+	required := map[string]string{
+		"KONVEYOR_MODEL_PRIMARY_MODEL":    os.Getenv("KONVEYOR_MODEL_PRIMARY_MODEL"),
+		"KONVEYOR_MODEL_PRIMARY_PROVIDER": os.Getenv("KONVEYOR_MODEL_PRIMARY_PROVIDER"),
+		"HUB_BASE_URL":                   os.Getenv("HUB_BASE_URL"),
+		"APP_ID":                          os.Getenv("APP_ID"),
+		"KONVEYOR_ACP_SECRET_KEY":         os.Getenv("KONVEYOR_ACP_SECRET_KEY"),
+	}
+	for k, v := range required {
+		if v == "" {
+			return nil, fmt.Errorf("required env var %s is not set", k)
+		}
 	}
 
 	cfg := &Config{
-		Model:            model,
-		Provider:         provider,
+		Model:            required["KONVEYOR_MODEL_PRIMARY_MODEL"],
+		Provider:         required["KONVEYOR_MODEL_PRIMARY_PROVIDER"],
 		Endpoint:         os.Getenv("KONVEYOR_MODEL_PRIMARY_ENDPOINT"),
 		APIKey:           os.Getenv("KONVEYOR_MODEL_PRIMARY_API_KEY"),
 		MaxTurns:         DefaultMaxTurns,
 		MaxFixIterations: DefaultMaxFixIterations,
+		HubBaseURL:       required["HUB_BASE_URL"],
+		HubToken:         os.Getenv("HUB_TOKEN"),
+		AppID:            required["APP_ID"],
+		ACPSecretKey:     required["KONVEYOR_ACP_SECRET_KEY"],
 	}
 
 	if n, err := strconv.Atoi(os.Getenv("KONVEYOR_PARAM_MAX_TURNS")); err == nil && n > 0 {
@@ -46,15 +59,5 @@ func LoadFromEnv() *Config {
 		cfg.MaxFixIterations = n
 	}
 
-	cfg.HubBaseURL = os.Getenv("HUB_BASE_URL")
-	if cfg.HubBaseURL == "" {
-		return nil
-	}
-	cfg.HubToken = os.Getenv("HUB_TOKEN")
-	cfg.AppID = os.Getenv("APP_ID")
-	if cfg.AppID == "" {
-		return nil
-	}
-
-	return cfg
+	return cfg, nil
 }

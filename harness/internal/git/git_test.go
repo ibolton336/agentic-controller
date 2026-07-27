@@ -12,7 +12,13 @@ import (
 	gogitcfg "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+
+	"github.com/konveyor/migration-harness/internal/watcher"
 )
+
+func init() {
+	watcher.InitSourceExts(".java")
+}
 
 func setupBareRemote(t *testing.T) (string, *gogit.Repository) {
 	t.Helper()

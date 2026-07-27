@@ -123,7 +123,11 @@ func (c *SessionClient) CreateSession(ctx context.Context, cwd string, mcpServer
 		return "", fmt.Errorf("session/new: no session ID received")
 	}
 
-	logging.Ok("ACP session created: %s", sessionID[:8]+"...")
+	preview := sessionID
+	if len(preview) > 8 {
+		preview = preview[:8] + "..."
+	}
+	logging.Ok("ACP session created: %s", preview)
 	return sessionID, nil
 }
 

@@ -64,8 +64,9 @@ func ParseAppID(s string) (uint, error) {
 	return uint(n), nil
 }
 
-// ClearEnv removes Hub credentials from the process environment
-// so child processes (goose) cannot access them.
+// ClearEnv removes Hub credentials from the process environment so
+// child processes (goose) cannot access them. Note: this does NOT
+// revoke the Hub API token — it remains valid until its JWT expiry.
 func ClearEnv() {
 	os.Unsetenv("HUB_BASE_URL")
 	os.Unsetenv("HUB_TOKEN")

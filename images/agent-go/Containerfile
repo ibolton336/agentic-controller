@@ -11,6 +11,8 @@ RUN dnf install -y \
     golang \
     && dnf clean all
 
+ENV HARNESS_SOURCE_EXTS=".go,.mod,.sum"
+
 USER harness
 
 ENTRYPOINT ["migration-harness"]

@@ -117,7 +117,10 @@ Sandbox, not a replacement.
 **Hub** — The Konveyor application inventory and analysis engine. In
 the agentic platform Hub serves as a data service: agents call its API
 at runtime to fetch analysis results, application metadata, and git
-credentials. Hub does not launch or manage agent workloads.
+credentials. Hub does not launch or manage agent workloads. After
+cloning, the harness clears the Hub API token from the process
+environment so goose and its child processes never see it. The token
+is **not revoked** — it remains valid until its JWT expiry.
 
 **Memory Service** — A persistent, queryable knowledge base owned by
 an Agent, accessible via MCP. The agent reads from it at session
