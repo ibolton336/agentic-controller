@@ -26,7 +26,15 @@
 export const PROTOCOL_VERSION = 1;
 
 const HEARTBEAT_INTERVAL_MS = 10_000;
-const DEFAULT_CWD = "/workspace";
+/**
+ * Where UI-initiated sessions root themselves: the migration-harness's clone
+ * directory (HARNESS_WORK_DIR default). Note the harness owns the RUN's
+ * session — it creates one at this cwd and drives the whole stage with a
+ * single composed prompt. A session created through this client is a
+ * SEPARATE, parallel conversation with the same agent; use session/load to
+ * observe/replay instead when the goal is to watch the run.
+ */
+const DEFAULT_CWD = "/workspace/repo";
 
 // ------------------------------------------------------------------ types
 

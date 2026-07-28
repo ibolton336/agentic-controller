@@ -101,6 +101,82 @@ export interface AgentRun {
   status?: AgentRunStatus;
 }
 
+// ----------------------------------------------------------- AgentPlaybook
+
+export interface AgentPlaybookStage {
+  /** Stage name, unique within the playbook. */
+  name: string;
+  /** Name of the Agent CR to execute for this stage. */
+  agentRef: string;
+  /** Task-specific instructions, composed with the Agent's prompt. */
+  instructions?: string;
+}
+
+export interface AgentPlaybookSpec {
+  /** High-level guide injected into every stage as the
+   * KONVEYOR_PLAYBOOK_INSTRUCTIONS env var, composed into the prompt. */
+  guide?: string;
+  /** Ordered stages; executed sequentially on a shared target branch. */
+  stages: AgentPlaybookStage[];
+}
+
+export interface AgentPlaybook {
+  apiVersion: typeof API_VERSION;
+  kind: "AgentPlaybook";
+  metadata: ObjectMeta;
+  spec: AgentPlaybookSpec;
+  status?: { observedGeneration?: number; conditions?: Condition[] };
+}
+
+// -------------------------------------------------------- AgentPlaybookRun
+
+export interface AgentPlaybookRunStageStatus {
+  /** Stage name, matching a stage in the AgentPlaybook. */
+  name: string;
+  phase: AgentRunPhase;
+  /** Name of the AgentRun created for this stage (hash-truncated past 63
+   * chars — always read this rather than recomputing "<run>-<stage>"). */
+  agentRunName?: string;
+}
+
+/** Spec is whole-spec immutable (CEL) — delete and recreate to change. */
+export interface AgentPlaybookRunSpec {
+  /** Name of the AgentPlaybook CR to execute. */
+  playbookRef: string;
+  /** Model selections applied to every stage (no per-stage overrides). */
+  models?: AgentRunModelSelection[];
+  /** Param values forwarded wholesale to every stage's AgentRun. */
+  params?: AgentRunParam[];
+  env?: EnvVar[];
+  envFrom?: EnvFromSource[];
+}
+
+export interface AgentPlaybookRunStatus {
+  phase?: AgentRunPhase;
+  observedGeneration?: number;
+  /**
+   * Stage currently executing. Cleared only when the run Succeeds — on a
+   * Failed run it stays set to the stage that failed. Use phase (or
+   * completionTime) as the terminal test, never this field.
+   */
+  currentStage?: string;
+  stages?: AgentPlaybookRunStageStatus[];
+  startTime?: string;
+  completionTime?: string;
+  /** NOTE: no duration field (unlike AgentRunStatus) — compute it from
+   * startTime/completionTime. Ready=False reason=StageRunning is the
+   * NORMAL healthy state while executing, not an error. */
+  conditions?: Condition[];
+}
+
+export interface AgentPlaybookRun {
+  apiVersion: typeof API_VERSION;
+  kind: "AgentPlaybookRun";
+  metadata: ObjectMeta;
+  spec: AgentPlaybookRunSpec;
+  status?: AgentPlaybookRunStatus;
+}
+
 // ------------------------------------------------------------------- Agent
 
 export type AgentParamType = "string" | "number" | "boolean";

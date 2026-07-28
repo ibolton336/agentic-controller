@@ -150,10 +150,18 @@ async function main(): Promise<void> {
     let i = 0;
     return {
       listAgents: () => Promise.reject(new Error("unused")),
+      getAgent: () => Promise.reject(new Error("unused")),
       listApplications: () => Promise.reject(new Error("unused")),
       listRuns: () => Promise.reject(new Error("unused")),
+      listPlaybooks: () => Promise.reject(new Error("unused")),
+      listPlaybookRuns: () => Promise.reject(new Error("unused")),
+      getPlaybookRun: () => Promise.reject(new Error("unused")),
       createRun: () => Promise.reject(new Error("unused")),
+      createPlaybookRun: () => Promise.reject(new Error("unused")),
       deleteRun: () => Promise.reject(new Error("unused")),
+      deletePlaybookRun: () => Promise.reject(new Error("unused")),
+      listImages: () => Promise.reject(new Error("unused")),
+      loadDefaults: () => Promise.reject(new Error("unused")),
       getRun: () => Promise.resolve(sequence[Math.min(i++, sequence.length - 1)] as AgentRun),
     };
   };
