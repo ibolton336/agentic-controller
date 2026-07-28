@@ -7,10 +7,24 @@ import {
   DescriptionListDescription,
   DescriptionListGroup,
   DescriptionListTerm,
+  Flex,
+  FlexItem,
+  Form,
+  FormGroup,
+  FormHelperText,
+  HelperText,
+  HelperTextItem,
+  Label,
+  Modal,
+  ModalBody,
+  ModalFooter,
+  ModalHeader,
+  ModalVariant,
   PageSection,
   ProgressStep,
   ProgressStepper,
   Spinner,
+  TextInput,
   Title,
 } from "@patternfly/react-core";
 import ArrowLeftIcon from "@patternfly/react-icons/dist/esm/icons/arrow-left-icon";
@@ -18,10 +32,13 @@ import type {
   AgentPlaybookRun,
   AgentPlaybookRunStage,
 } from "@konveyor/agentic-client/contract";
+import { defaultTargetBranch, isTerminalPhase } from "@konveyor/agentic-client/contract";
 import type { ShimClient } from "@konveyor/agentic-client/transport-shim";
 import { errorMessage, formatAge } from "../format";
 import { PhaseLabel } from "./PhaseLabel";
 import { playbookDuration } from "./PlaybookRunsPage";
+import { BranchPanel } from "./BranchPanel";
+import { runHubCoordinates, useApplicationInventory } from "./sources";
 
 const POLL_MS = 2_000;
 
@@ -49,13 +66,36 @@ interface PlaybookRunDetailPageProps {
   onBack: () => void;
   /** Open a stage's AgentRun in the existing run detail page (ACP chat included). */
   onOpenRun: (runName: string) => void;
+  /** Called after the playbook run is successfully deleted. */
+  onDeleted: () => void;
+  /** Navigate to the new playbook run a re-run created. */
+  onRerun: (name: string) => void;
 }
 
-export function PlaybookRunDetailPage({ api, name, onBack, onOpenRun }: PlaybookRunDetailPageProps) {
+export function PlaybookRunDetailPage({
+  api,
+  name,
+  onBack,
+  onOpenRun,
+  onDeleted,
+  onRerun,
+}: PlaybookRunDetailPageProps) {
   const [run, setRun] = useState<AgentPlaybookRun | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [gone, setGone] = useState(false);
   const inFlight = useRef(false);
+
+  const [isDeleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const [isRerunOpen, setRerunOpen] = useState(false);
+  const [rerunBranch, setRerunBranch] = useState("");
+  const [rerunSubmitting, setRerunSubmitting] = useState(false);
+  const [rerunError, setRerunError] = useState<string | null>(null);
+
+  // Inventory failures leave `application` undefined — BranchPanel copes.
+  const inventory = useApplicationInventory(api);
 
   const refresh = useCallback(async () => {
     if (inFlight.current || gone) return;
@@ -82,15 +122,85 @@ export function PlaybookRunDetailPage({ api, name, onBack, onOpenRun }: Playbook
 
   const stages = run?.status?.stages ?? [];
   const duration = run ? playbookDuration(run) : undefined;
+  const coordinates = runHubCoordinates(run?.spec.env);
+  const application = inventory.applications.find((a) => a.id === coordinates.appId);
+  const params = run?.spec.params ?? [];
+  const models = run?.spec.models ?? [];
+
+  const confirmDelete = async () => {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await api.deletePlaybookRun(name);
+      onDeleted();
+    } catch (err) {
+      setDeleteError(errorMessage(err));
+      setDeleting(false);
+    }
+  };
+
+  const openRerun = () => {
+    setRerunError(null);
+    setRerunBranch(coordinates.targetBranch ?? defaultTargetBranch());
+    setRerunOpen(true);
+  };
+
+  const canRerun =
+    run !== null && (!coordinates.appId || rerunBranch.trim() !== "") && !rerunSubmitting;
+
+  const submitRerun = async () => {
+    if (!run || !canRerun) return;
+    setRerunSubmitting(true);
+    setRerunError(null);
+    try {
+      const rerunParams = Object.fromEntries((run.spec.params ?? []).map((p) => [p.name, p.value]));
+      const primary = run.spec.models?.find((m) => m.role === "primary");
+      const created = await api.createPlaybookRun({
+        playbookRef: run.spec.playbookRef,
+        params: Object.keys(rerunParams).length > 0 ? rerunParams : undefined,
+        applicationRef: coordinates.appId,
+        targetBranch: coordinates.appId ? rerunBranch.trim() : undefined,
+        model: primary ? { provider: primary.provider, model: primary.model } : undefined,
+      });
+      const newName = created.metadata.name;
+      if (!newName) throw new Error("shim returned a created playbook run without metadata.name");
+      onRerun(newName);
+    } catch (err) {
+      setRerunError(errorMessage(err));
+      setRerunSubmitting(false);
+    }
+  };
 
   return (
     <PageSection>
       <Button variant="link" isInline icon={<ArrowLeftIcon />} onClick={onBack}>
         Back to playbook runs
       </Button>
-      <Title headingLevel="h2" size="xl" style={{ margin: "0.5rem 0" }}>
-        {name} <PhaseLabel phase={run?.status?.phase} />
-      </Title>
+      <Flex
+        alignItems={{ default: "alignItemsCenter" }}
+        spaceItems={{ default: "spaceItemsMd" }}
+        style={{ margin: "0.5rem 0" }}
+      >
+        <FlexItem>
+          <Title headingLevel="h2" size="xl">
+            {name} <PhaseLabel phase={run?.status?.phase} />
+          </Title>
+        </FlexItem>
+        <FlexItem align={{ default: "alignRight" }}>
+          <Button variant="secondary" isDisabled={run === null} onClick={openRerun}>
+            Re-run
+          </Button>{" "}
+          <Button
+            variant="danger"
+            onClick={() => {
+              setDeleteError(null);
+              setDeleteOpen(true);
+            }}
+          >
+            Delete
+          </Button>
+        </FlexItem>
+      </Flex>
 
       {fetchError && (
         <Alert
@@ -137,6 +247,60 @@ export function PlaybookRunDetailPage({ api, name, onBack, onOpenRun }: Playbook
           </DescriptionList>
 
           <Title headingLevel="h3" size="lg" style={{ margin: "1rem 0 0.5rem" }}>
+            Run spec
+          </Title>
+          <DescriptionList isHorizontal isCompact>
+            <DescriptionListGroup>
+              <DescriptionListTerm>Params</DescriptionListTerm>
+              <DescriptionListDescription>
+                {params.length === 0
+                  ? "—"
+                  : params.map((p) => (
+                      <Label key={p.name} isCompact variant="outline" style={{ marginRight: "0.5rem" }}>
+                        <code>
+                          {p.name}={p.value}
+                        </code>
+                      </Label>
+                    ))}
+              </DescriptionListDescription>
+            </DescriptionListGroup>
+            <DescriptionListGroup>
+              <DescriptionListTerm>Models</DescriptionListTerm>
+              <DescriptionListDescription>
+                {models.length === 0
+                  ? "—"
+                  : models.map((m) => (
+                      <div key={m.role}>
+                        {m.role}: {m.provider} / {m.model}
+                      </div>
+                    ))}
+              </DescriptionListDescription>
+            </DescriptionListGroup>
+            <DescriptionListGroup>
+              <DescriptionListTerm>Application id</DescriptionListTerm>
+              <DescriptionListDescription>{coordinates.appId ?? "—"}</DescriptionListDescription>
+            </DescriptionListGroup>
+            <DescriptionListGroup>
+              <DescriptionListTerm>Hub base URL</DescriptionListTerm>
+              <DescriptionListDescription>
+                {coordinates.hubBaseUrl ? <code>{coordinates.hubBaseUrl}</code> : "—"}
+              </DescriptionListDescription>
+            </DescriptionListGroup>
+            <DescriptionListGroup>
+              <DescriptionListTerm>Hub token</DescriptionListTerm>
+              <DescriptionListDescription>
+                {coordinates.hasToken ? "set (hidden)" : "—"}
+              </DescriptionListDescription>
+            </DescriptionListGroup>
+            <DescriptionListGroup>
+              <DescriptionListTerm>Target branch</DescriptionListTerm>
+              <DescriptionListDescription>
+                {coordinates.targetBranch ? <code>{coordinates.targetBranch}</code> : "—"}
+              </DescriptionListDescription>
+            </DescriptionListGroup>
+          </DescriptionList>
+
+          <Title headingLevel="h3" size="lg" style={{ margin: "1rem 0 0.5rem" }}>
             Stages
           </Title>
           {stages.length === 0 ? (
@@ -172,8 +336,122 @@ export function PlaybookRunDetailPage({ api, name, onBack, onOpenRun }: Playbook
               ))}
             </ProgressStepper>
           )}
+
+          {coordinates.targetBranch && (
+            <BranchPanel
+              application={application}
+              targetBranch={coordinates.targetBranch}
+              isTerminal={isTerminalPhase(run.status?.phase)}
+            />
+          )}
         </>
       ) : null}
+
+      {isDeleteOpen && (
+        <Modal
+          variant={ModalVariant.small}
+          isOpen
+          onClose={() => {
+            if (!deleting) setDeleteOpen(false);
+          }}
+          aria-labelledby="delete-playbook-run-title"
+        >
+          <ModalHeader title="Delete AgentPlaybookRun?" labelId="delete-playbook-run-title" />
+          <ModalBody>
+            {deleteError && (
+              <Alert variant="danger" isInline title="Delete failed" style={{ marginBottom: "1rem" }}>
+                {deleteError}
+              </Alert>
+            )}
+            Delete playbook run <strong>{name}</strong>? Its stage AgentRuns are owner-referenced
+            and garbage-collected with it.
+          </ModalBody>
+          <ModalFooter>
+            <Button
+              variant="danger"
+              isLoading={deleting}
+              isDisabled={deleting}
+              onClick={() => void confirmDelete()}
+            >
+              Delete
+            </Button>
+            <Button variant="link" isDisabled={deleting} onClick={() => setDeleteOpen(false)}>
+              Cancel
+            </Button>
+          </ModalFooter>
+        </Modal>
+      )}
+
+      {isRerunOpen && (
+        <Modal
+          variant={ModalVariant.small}
+          isOpen
+          onClose={() => {
+            if (!rerunSubmitting) setRerunOpen(false);
+          }}
+          aria-labelledby="rerun-playbook-run-title"
+        >
+          <ModalHeader
+            title="Re-run (create a new run)"
+            labelId="rerun-playbook-run-title"
+            description="AgentPlaybookRun specs are immutable, so this creates a new playbook run with the same spec."
+          />
+          <ModalBody>
+            {rerunError && (
+              <Alert variant="danger" isInline title="Re-run failed" style={{ marginBottom: "1rem" }}>
+                {rerunError}
+              </Alert>
+            )}
+            <Form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void submitRerun();
+              }}
+            >
+              {coordinates.appId && (
+                <FormGroup label="Target branch" isRequired fieldId="rerun-playbook-target-branch">
+                  <TextInput
+                    id="rerun-playbook-target-branch"
+                    isRequired
+                    value={rerunBranch}
+                    validated={rerunBranch.trim() === "" ? "error" : "default"}
+                    onChange={(_e, v) => setRerunBranch(v)}
+                  />
+                  <FormHelperText>
+                    <HelperText>
+                      <HelperTextItem variant={rerunBranch.trim() === "" ? "error" : "default"}>
+                        {rerunBranch.trim() === ""
+                          ? "Required."
+                          : "Keep it to continue that branch's work; change it (e.g. Generate new) for a fresh start."}
+                      </HelperTextItem>
+                    </HelperText>
+                  </FormHelperText>
+                  <Button
+                    variant="link"
+                    isInline
+                    onClick={() => setRerunBranch(defaultTargetBranch())}
+                  >
+                    Generate new
+                  </Button>
+                </FormGroup>
+              )}
+            </Form>
+          </ModalBody>
+          <ModalFooter>
+            <Button
+              variant="primary"
+              isDisabled={!canRerun}
+              isLoading={rerunSubmitting}
+              onClick={() => void submitRerun()}
+            >
+              Create new run
+            </Button>
+            <Button variant="link" isDisabled={rerunSubmitting} onClick={() => setRerunOpen(false)}>
+              Cancel
+            </Button>
+          </ModalFooter>
+        </Modal>
+      )}
     </PageSection>
   );
 }

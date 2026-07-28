@@ -105,6 +105,8 @@ export function App() {
               api={api.client}
               name={view.name}
               onBack={() => setView({ kind: "playbooks" })}
+              onDeleted={() => setView({ kind: "playbooks" })}
+              onRerun={(name) => setView({ kind: "playbookDetail", name })}
               onOpenRun={(runName) =>
                 setView({ kind: "detail", runName, fromPlaybookRun: view.name })
               }
@@ -120,6 +122,14 @@ export function App() {
                     : { kind: "list" },
                 )
               }
+              onDeleted={() =>
+                setView(
+                  view.fromPlaybookRun
+                    ? { kind: "playbookDetail", name: view.fromPlaybookRun }
+                    : { kind: "list" },
+                )
+              }
+              onRerun={(newRunName) => setView({ kind: "detail", runName: newRunName })}
             />
           )}
         </>
