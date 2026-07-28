@@ -4,10 +4,15 @@ import {
   Bullseye,
   Button,
   EmptyState,
+  EmptyStateActions,
   EmptyStateBody,
+  EmptyStateFooter,
   PageSection,
   Spinner,
   Title,
+  Toolbar,
+  ToolbarContent,
+  ToolbarItem,
 } from "@patternfly/react-core";
 import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
 import CubesIcon from "@patternfly/react-icons/dist/esm/icons/cubes-icon";
@@ -15,6 +20,8 @@ import type { AgentPlaybookRun } from "@konveyor/agentic-client/contract";
 import type { ShimClient } from "@konveyor/agentic-client/transport-shim";
 import { errorMessage, formatAge } from "../format";
 import { PhaseLabel } from "./PhaseLabel";
+import { CreatePlaybookRunModal } from "./CreatePlaybookRunModal";
+import { LoadDefaultsButton } from "./LoadDefaultsButton";
 
 const POLL_MS = 2_000;
 
@@ -42,6 +49,7 @@ interface PlaybookRunsPageProps {
 export function PlaybookRunsPage({ api, onOpenPlaybookRun }: PlaybookRunsPageProps) {
   const [runs, setRuns] = useState<AgentPlaybookRun[] | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [isCreateOpen, setCreateOpen] = useState(false);
   const inFlight = useRef(false);
 
   const refresh = useCallback(async () => {
@@ -72,6 +80,18 @@ export function PlaybookRunsPage({ api, onOpenPlaybookRun }: PlaybookRunsPagePro
       <Title headingLevel="h2" size="xl">
         Playbook runs
       </Title>
+      <Toolbar inset={{ default: "insetNone" }}>
+        <ToolbarContent>
+          <ToolbarItem>
+            <Button variant="primary" onClick={() => setCreateOpen(true)}>
+              Create playbook run
+            </Button>
+          </ToolbarItem>
+          <ToolbarItem>
+            <LoadDefaultsButton api={api} />
+          </ToolbarItem>
+        </ToolbarContent>
+      </Toolbar>
       {fetchError && (
         <Alert
           variant="danger"
@@ -89,9 +109,16 @@ export function PlaybookRunsPage({ api, onOpenPlaybookRun }: PlaybookRunsPagePro
       ) : runs !== null && runs.length === 0 ? (
         <EmptyState titleText="No playbook runs" headingLevel="h3" icon={CubesIcon}>
           <EmptyStateBody>
-            No AgentPlaybookRuns exist yet. Create one with kubectl against an AgentPlaybook; each
-            stage runs as its own AgentRun, in order.
+            No AgentPlaybookRuns exist yet. Create one against an AgentPlaybook; each stage runs as
+            its own AgentRun, in order.
           </EmptyStateBody>
+          <EmptyStateFooter>
+            <EmptyStateActions>
+              <Button variant="primary" onClick={() => setCreateOpen(true)}>
+                Create playbook run
+              </Button>
+            </EmptyStateActions>
+          </EmptyStateFooter>
         </EmptyState>
       ) : runs !== null ? (
         <Table aria-label="Playbook runs" variant="compact">
@@ -135,6 +162,17 @@ export function PlaybookRunsPage({ api, onOpenPlaybookRun }: PlaybookRunsPagePro
           </Tbody>
         </Table>
       ) : null}
+
+      {isCreateOpen && (
+        <CreatePlaybookRunModal
+          api={api}
+          onClose={() => setCreateOpen(false)}
+          onCreated={(name) => {
+            setCreateOpen(false);
+            onOpenPlaybookRun(name);
+          }}
+        />
+      )}
     </PageSection>
   );
 }

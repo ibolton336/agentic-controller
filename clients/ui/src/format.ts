@@ -32,3 +32,49 @@ export function truncate(text: string, max: number): string {
   const t = text.trim();
   return t.length <= max ? t : `${t.slice(0, max - 1)}…`;
 }
+
+// ----------------------------------------------------- git host URL helpers
+
+/**
+ * {owner, repo} when the URL is a github.com repository (the one host whose
+ * REST API is CORS-open to browsers, so the console can show a commit feed
+ * without credentials). Everything else — GitLab, Gitea, ssh remotes —
+ * returns undefined and callers degrade to plain text.
+ */
+export function parseGitHubRepo(repoUrl?: string): { owner: string; repo: string } | undefined {
+  if (!repoUrl) return undefined;
+  const m = /^https?:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/.exec(
+    repoUrl.trim(),
+  );
+  return m ? { owner: m[1], repo: m[2] } : undefined;
+}
+
+/** Web URL of a branch on the repo's host; undefined when the host shape is unknown. */
+export function repoBranchUrl(repoUrl: string | undefined, branch: string): string | undefined {
+  if (!repoUrl) return undefined;
+  const base = repoUrl.trim().replace(/\.git$/, "").replace(/\/+$/, "");
+  const gh = parseGitHubRepo(repoUrl);
+  if (gh) return `${base}/tree/${encodeURIComponent(branch)}`;
+  if (/^https?:\/\/(?:www\.)?gitlab\.com\//.test(base)) {
+    return `${base}/-/tree/${encodeURIComponent(branch)}`;
+  }
+  return undefined;
+}
+
+/** Web URL of a file on a branch (GitHub/GitLab shapes only). */
+export function repoFileUrl(
+  repoUrl: string | undefined,
+  branch: string,
+  path: string,
+): string | undefined {
+  if (!repoUrl) return undefined;
+  const base = repoUrl.trim().replace(/\.git$/, "").replace(/\/+$/, "");
+  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+  if (parseGitHubRepo(repoUrl)) {
+    return `${base}/blob/${encodeURIComponent(branch)}/${encodedPath}`;
+  }
+  if (/^https?:\/\/(?:www\.)?gitlab\.com\//.test(base)) {
+    return `${base}/-/blob/${encodeURIComponent(branch)}/${encodedPath}`;
+  }
+  return undefined;
+}

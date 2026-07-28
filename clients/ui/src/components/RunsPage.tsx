@@ -28,6 +28,7 @@ import type { ShimClient } from "@konveyor/agentic-client/transport-shim";
 import { errorMessage, formatAge, formatDuration } from "../format";
 import { PhaseLabel } from "./PhaseLabel";
 import { CreateRunModal } from "./CreateRunModal";
+import { LoadDefaultsButton } from "./LoadDefaultsButton";
 
 const POLL_MS = 2_000;
 
@@ -97,6 +98,9 @@ export function RunsPage({ api, onOpenRun, onOpenPlaybookRun }: RunsPageProps) {
               <Button variant="primary" onClick={() => setCreateOpen(true)}>
                 Create run
               </Button>
+            </ToolbarItem>
+            <ToolbarItem>
+              <LoadDefaultsButton api={api} />
             </ToolbarItem>
           </ToolbarContent>
         </Toolbar>
