@@ -1,3 +1,10 @@
+# DEPRECATED (2026-07): superseded by the Go migration-harness image
+# hierarchy (images/agent-base + agent-<lang>, PR #53) — that harness pulls
+# the application from the Hub itself (clone-from-param is gone), builds the
+# prompt from mounted skills, and owns the ACP session. This image remains
+# only until #53's images publish; delete it when PR #35 rebases onto
+# merged #53. Do not extend it.
+#
 # Real harness image: goose v1.39.0 serving ACP over HTTP/WebSocket.
 # v1.39.0 = plain HTTP (the self-signed-TLS default landed later), auth via
 # X-Secret-Key header or ?token= query param, per ADR 0002.

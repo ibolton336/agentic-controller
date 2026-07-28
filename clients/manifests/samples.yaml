@@ -33,19 +33,6 @@ spec:
       contextWindow: 32000
       tier: efficient
 ---
-apiVersion: v1
-kind: Secret
-metadata:
-  name: git-credentials-coolstore
-  namespace: konveyor-agents
-type: Opaque
-stringData:
-  # Mock application identity (see hub-shim's application inventory). The
-  # platform mounts this via envFrom when an agent declares a credential
-  # sourced from konveyor.io/application-identity.
-  GIT_USERNAME: "coolstore-bot"
-  GIT_TOKEN: "not-a-real-token"
----
 apiVersion: konveyor.io/v1alpha1
 kind: Agent
 metadata:
@@ -54,17 +41,12 @@ metadata:
   labels:
     # Konveyor UIs list only managed agents (hub-shim filters on this).
     konveyor.io/managed: "true"
-  annotations:
-    # Platform-resolved params (ADR 0005): the platform fills these from
-    # the selected application; the UI hides them from the create form.
-    konveyor.io/param-sources: |
-      {"repository": "konveyor.io/application-repository-url",
-       "branch": "konveyor.io/application-repository-branch"}
-    konveyor.io/credential-sources: |
-      {"git": "konveyor.io/application-identity"}
 spec:
   # In the real system this is the harness image (goose + toolchains).
-  # The controller simulator substitutes the mock ACP harness image.
+  # The controller simulator substitutes the mock ACP harness image. The
+  # mock is a FIXTURE: it runs without an application and without skills —
+  # real migration agents need both (the migration-harness pulls the
+  # application from the Hub and fatals with zero mounted skills).
   image: "acp-mock-harness:dev"
   prompt: |
     You are a migration analysis agent. Analyze the application source
@@ -74,8 +56,8 @@ spec:
   params:
     - name: repository
       type: string
-      description: Git URL of the application repository
-      required: true
+      description: Git URL the mock pretends to analyze (fixtures only)
+      default: "https://github.com/konveyor-ecosystem/coolstore.git"
     - name: branch
       type: string
       description: Branch to analyze

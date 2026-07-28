@@ -56,6 +56,8 @@ ok "goose-harness:dev"
 echo "── sample resources ────────────────────────────────"
 kubectl apply -f "$ROOT/manifests/samples.yaml" >/dev/null
 ok "samples applied (mock agent + provider)"
+kubectl apply -f "$ROOT/manifests/image-catalog.yaml" >/dev/null
+ok "agent-image catalog applied (GET /api/images serves it)"
 if kubectl get secret aws-bedrock-creds -n $NS >/dev/null 2>&1; then
   kubectl apply -f "$ROOT/manifests/goose-bedrock.yaml" >/dev/null
   ok "goose-bedrock applied (aws-bedrock-creds present)"

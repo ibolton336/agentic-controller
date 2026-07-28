@@ -13,11 +13,17 @@ metadata:
   name: agentic-gateway
   namespace: konveyor-agents
 rules:
+  # Run kinds: create/delete but never update (specs are immutable).
   - apiGroups: ["konveyor.io"]
-    resources: ["agentruns"]
+    resources: ["agentruns", "agentplaybookruns"]
     verbs: ["get", "list", "watch", "create", "delete"]
+  # Catalog kinds the management UI authors (POST/PUT/DELETE routes).
   - apiGroups: ["konveyor.io"]
-    resources: ["agents", "llmproviders"]
+    resources: ["agents", "skillcards", "skillcollections", "agentplaybooks"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  # Read-only: model pickers; providers are cluster-admin-owned.
+  - apiGroups: ["konveyor.io"]
+    resources: ["llmproviders"]
     verbs: ["get", "list"]
   - apiGroups: [""]
     resources: ["secrets"]
@@ -25,6 +31,10 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list"]
+  # Agent-image catalog ConfigMap (GET /api/images, seeded by /api/defaults).
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

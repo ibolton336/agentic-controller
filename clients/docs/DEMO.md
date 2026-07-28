@@ -8,6 +8,32 @@ the web UI is picked up from the IDE — the architect → developer handoff.
 No simulator anywhere: the reconciler is the real controller, the sandbox
 is Agent Sandbox v0.5.0, the agent is goose 1.39 on AWS Bedrock.
 
+> **Contract update (2026-07-28, PR #53 alignment).** The platform-resolved
+> params flow this demo narrates (application picker → repository/branch
+> resolved via ADR 0005 annotations, identity-Secret bridge) is RETIRED.
+> The shim now injects `HUB_BASE_URL`/`HUB_TOKEN`/`APP_ID`/`TARGET_BRANCH`
+> as `spec.env`, and the Konveyor-aware migration-harness pulls the repo,
+> decrypted git identity, and analysis from the Hub itself — withholding
+> credentials from the agent. `goose-harness:dev` (clone-from-param) is
+> deprecated in favor of the #53 image hierarchy (`agent-base`/`agent-java`
+> …). The mock create-flow beat still works (params are plain form fields
+> now); the real-agent beats need the #53 images. The demo script below
+> predates this and is refreshed as part of the seeded-defaults phase.
+
+> **Seeded defaults + image catalog (Phase 2, 2026-07-28).** Seeding is
+> now API-first: the UI's **Load defaults** button (or
+> `curl -X POST :7080/api/defaults`) creates the managed default set —
+> LLMProvider `gcp-vertex-ai`, the plan/execute/verify stage SkillCards,
+> the `javaee-to-quarkus` and `patternfly-migration` domain cards, three
+> `migration-*-agent` stage Agents on `agent-java` plus three
+> `patternfly-*-agent` stage Agents on `agent-nodejs`, both playbooks, and
+> the `agent-image-catalog` ConfigMap. Create-only and re-runnable; every
+> resource carries `konveyor.io/managed=true`. `GET /api/images` serves
+> the catalog (ConfigMap first, built-in hierarchy as fallback) and the
+> run launcher annotates each agent's image from it. `demo-up.sh` still
+> applies `samples.yaml` (mock fixture) and the catalog ConfigMap, but no
+> longer needs to own domain resources.
+
 All paths below are relative to `clients/` in this repository.
 
 ## The stack

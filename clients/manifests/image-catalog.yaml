@@ -1,0 +1,55 @@
+# Agent-image catalog — the "resource to track images" (Phase 2).
+#
+# A managed ConfigMap, not a CRD: the catalog is cluster data an admin can
+# edit without a controller rollout. The shim serves it at GET /api/images
+# (falling back to the same built-in list when this ConfigMap is absent),
+# and POST /api/defaults creates it if missing. Propose an AgentImage CRD
+# upstream only if this proves insufficient.
+#
+# Content mirrors the upstream image hierarchy (images/README.md on #53):
+# agent-base + per-language derivatives. Keep in sync with
+# DEFAULT_IMAGE_CATALOG in packages/hub-shim/src/defaults.ts.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-image-catalog
+  namespace: konveyor-agents
+  labels:
+    konveyor.io/managed: "true"
+data:
+  catalog.json: |
+    [
+      {
+        "image": "quay.io/konveyor/agent-base:dev",
+        "displayName": "Agent base",
+        "notes": "UBI 10 + goose CLI + git + Python 3 + graphify + migration-harness binary"
+      },
+      {
+        "image": "quay.io/konveyor/agent-java:dev",
+        "displayName": "Java agent",
+        "language": "java",
+        "base": "quay.io/konveyor/agent-base:dev",
+        "notes": "adds JDK 21 and Maven"
+      },
+      {
+        "image": "quay.io/konveyor/agent-go:dev",
+        "displayName": "Go agent",
+        "language": "go",
+        "base": "quay.io/konveyor/agent-base:dev",
+        "notes": "adds the Go toolchain"
+      },
+      {
+        "image": "quay.io/konveyor/agent-csharp:dev",
+        "displayName": "C# agent",
+        "language": "csharp",
+        "base": "quay.io/konveyor/agent-base:dev",
+        "notes": "adds the .NET SDK"
+      },
+      {
+        "image": "quay.io/konveyor/agent-nodejs:dev",
+        "displayName": "Node.js agent",
+        "language": "nodejs",
+        "base": "quay.io/konveyor/agent-base:dev",
+        "notes": "adds Node.js and npm"
+      }
+    ]
