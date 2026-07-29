@@ -1,0 +1,14 @@
+kind: feature
+
+description: >
+  Import the reference client stack under clients/ — isomorphic client
+  core, hub-shim (the proposed Hub passthrough proxy surface), PatternFly
+  browser UI, mock and goose agent harnesses, in-cluster deploy manifests,
+  and the end-to-end demo — plus ADRs 0004 (verified client contract and
+  transports) and 0005 (platform-resolved params). The stack covers both
+  run kinds (AgentRun and AgentPlaybookRun with a stage ladder), a
+  management console for the catalog kinds (Agents, SkillCards,
+  SkillCollections, AgentPlaybooks) backed by shim write routes, an image
+  catalog with defaults, explicit model selection validated against
+  declared providers, and the env/param contract of the #53
+  migration-harness.

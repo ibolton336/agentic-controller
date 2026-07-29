@@ -1,0 +1,94 @@
+# Real migration agent wired to AWS Bedrock, in the PR #53 (migration-
+# harness) shape: the provider CR NAME maps verbatim to a goose provider id
+# (lowercased, "-" -> "_": aws-bedrock -> aws_bedrock), the agent runs a
+# harness image and mounts skills as OCI image volumes, and the run supplies
+# Hub coordinates + TARGET_BRANCH via spec.env (the hub-shim injects them
+# from applicationRef).
+#
+# Images: quay.io/konveyor/agent-java + quay.io/konveyor/skills:* publish
+# from CI once #53 merges; until then build them locally with
+# agentic-controller's hack/harness-test/setup.sh (kind) or the equivalent
+# minikube image build.
+#
+# The aws-bedrock-creds secret is created separately so credentials never
+# land in this file:
+#   kubectl create secret generic aws-bedrock-creds -n konveyor-agents \
+#     --from-literal=AWS_ACCESS_KEY_ID=... \
+#     --from-literal=AWS_SECRET_ACCESS_KEY=... \
+#     --from-literal=AWS_REGION=us-east-1
+---
+apiVersion: konveyor.io/v1alpha1
+kind: LLMProvider
+metadata:
+  name: aws-bedrock
+  namespace: konveyor-agents
+spec:
+  endpoint: "https://bedrock-runtime.us-east-1.amazonaws.com"
+  # Keyless: with key omitted the controller exposes the whole Secret to the
+  # sandbox via envFrom — required for SigV4 providers, which need the
+  # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_REGION triple, not a
+  # single bearer token.
+  credentialRef:
+    secretName: aws-bedrock-creds
+  models:
+    - name: "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+      contextWindow: 200000
+      tier: efficient
+    - name: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+      contextWindow: 200000
+      tier: primary
+---
+apiVersion: konveyor.io/v1alpha1
+kind: SkillCard
+metadata:
+  name: execute
+  namespace: konveyor-agents
+  labels:
+    konveyor.io/managed: "true"
+spec:
+  displayName: Execute migration
+  description: Stage skill — read PLAN.md and migrate file-by-file, no builds.
+  type: skill
+  image: "quay.io/konveyor/skills:execute"
+---
+apiVersion: konveyor.io/v1alpha1
+kind: SkillCard
+metadata:
+  name: javaee-to-quarkus
+  namespace: konveyor-agents
+  labels:
+    konveyor.io/managed: "true"
+spec:
+  displayName: Java EE to Quarkus
+  description: Domain skill — annotation/config/dependency maps for the Quarkus target.
+  type: skill
+  image: "quay.io/konveyor/skills:javaee-to-quarkus"
+---
+apiVersion: konveyor.io/v1alpha1
+kind: Agent
+metadata:
+  name: java-migrator-goose
+  namespace: konveyor-agents
+  labels:
+    konveyor.io/managed: "true"
+spec:
+  # agent-base + JDK 21/Maven; entrypoint is the migration-harness binary,
+  # which pulls the application (repo, creds, analysis) from the Hub itself
+  # using the run's injected HUB_BASE_URL/HUB_TOKEN/APP_ID, clones to
+  # /workspace/repo, and withholds the git credentials from the agent.
+  image: "quay.io/konveyor/agent-java:dev"
+  prompt: |
+    You are a careful Java migration agent. Work only on the checked-out
+    repository; commit nothing yourself — the harness owns git.
+  providers:
+    - ref: aws-bedrock
+  # Zero mounted skills is a fatal harness error — every migration agent
+  # pairs at least one stage skill with a domain skill.
+  skillCards:
+    - ref: execute
+    - ref: javaee-to-quarkus
+  params:
+    - name: max_turns
+      type: number
+      description: Cap on agent turns for the stage
+      default: "200"
