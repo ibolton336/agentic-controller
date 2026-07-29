@@ -85,6 +85,46 @@ func StripCredentials(repo *gogit.Repository) error {
 	return nil
 }
 
+func EnsureGitignore(repoDir string, patterns []string) error {
+	gitignorePath := filepath.Join(repoDir, ".gitignore")
+	existing, _ := os.ReadFile(gitignorePath)
+	content := string(existing)
+
+	var toAdd []string
+	for _, p := range patterns {
+		if !strings.Contains(content, p) {
+			toAdd = append(toAdd, p)
+		}
+	}
+	if len(toAdd) == 0 {
+		return nil
+	}
+
+	f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("open .gitignore: %w", err)
+	}
+	defer f.Close()
+
+	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
+		f.WriteString("\n")
+	}
+	for _, p := range toAdd {
+		f.WriteString(p + "\n")
+	}
+	return nil
+}
+
+func ConfigureAuthor(repo *gogit.Repository) error {
+	cfg, err := repo.Config()
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+	cfg.User.Name = "migration-agent"
+	cfg.User.Email = "migration-agent@konveyor.io"
+	return repo.SetConfig(cfg)
+}
+
 func CheckoutBranch(repo *gogit.Repository, branch string) error {
 	localRef := plumbing.NewBranchReferenceName(branch)
 

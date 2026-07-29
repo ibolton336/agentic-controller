@@ -13,28 +13,28 @@ import (
 )
 
 // DefaultQuietPeriod is the debounce window: after the last relevant
-// filesystem event, the watcher waits this long before committing.
+// filesystem event, the watcher waits this long before pushing.
 const DefaultQuietPeriod = 30 * time.Second
 
-type CommitPushFn func() error
+type PushFn func() error
 
 type Watcher struct {
 	dir         string
-	commitFn    CommitPushFn
+	pushFn      PushFn
 	fsw         *fsnotify.Watcher
 	quietPeriod time.Duration
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
 }
 
-func New(dir string, commitFn CommitPushFn) (*Watcher, error) {
+func New(dir string, pushFn PushFn) (*Watcher, error) {
 	fsw, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, err
 	}
 	return &Watcher{
 		dir:         dir,
-		commitFn:    commitFn,
+		pushFn:      pushFn,
 		fsw:         fsw,
 		quietPeriod: DefaultQuietPeriod,
 	}, nil
@@ -107,7 +107,7 @@ func (w *Watcher) loop(ctx context.Context) {
 			logging.Warn("watcher error: %v", err)
 		case <-timer.C:
 			if dirty {
-				w.doCommit()
+				w.doPush()
 				dirty = false
 			}
 		}
@@ -128,9 +128,11 @@ func isRelevantChange(relPath string) bool {
 	return !excludeExts[ext]
 }
 
-func (w *Watcher) doCommit() {
-	if err := w.commitFn(); err != nil {
-		logging.Warn("watcher commit+push: %v", err)
+func (w *Watcher) doPush() {
+	if err := w.pushFn(); err != nil {
+		logging.Warn("watcher push: %v", err)
+	} else {
+		logging.Ok("watcher push: success")
 	}
 }
 

@@ -41,7 +41,8 @@ For each step in PLAN.md, follow this exact sequence:
 1. Read the target file
 2. Apply transformations per the step's instructions and reference patterns
 3. Write the modified file
-4. Move to the next step immediately
+4. Run: git add -A && git commit -m "<describe the migration change>"
+5. Move to the next step immediately
 ```
 
 ### Guardrails
@@ -59,3 +60,4 @@ For each step in PLAN.md, follow this exact sequence:
 - Work through ALL items — completeness matters more than perfection
 - Do NOT run builds or tests — that is the verify stage's job
 - Do NOT modify PLAN.md
+- Commit after each step — the harness pushes your commits to the remote

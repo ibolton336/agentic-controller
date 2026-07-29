@@ -17,9 +17,9 @@
 │  5. Start goose serve (ACP)                          │
 │  6. Discover skills from /opt/skills/*/SKILL.md      │
 │  7. Build prompt from context layers                 │
-│  8. Start filesystem watcher (incremental commits)   │
+│  8. Start filesystem watcher (incremental push)      │
 │  9. Send single ACP prompt (blocks until completion) │
-│ 10. Final commit + push                              │
+│ 10. Final push                                       │
 └──────────────────────────────────────────────────────┘
 ```
 
@@ -79,13 +79,14 @@ All configuration is via environment variables — there is no config file or `i
 ## Git Lifecycle
 
 1. **Clone** — harness clones using Hub-provided credentials
-2. **Strip credentials** — removes auth from the git remote config
+2. **Strip credentials** — removes push auth from the git remote config
 3. **Clear env** — Hub token is cleared from the process environment
 4. **Checkout branch** — checks out `TARGET_BRANCH`
-5. **Watcher** — background fsnotify watcher commits+pushes after a 30s quiet period
-6. **Final push** — catches anything the watcher missed (runs even on failure)
+5. **Agent commits** — the agent commits locally with descriptive messages (per skill instructions)
+6. **Watcher** — background fsnotify watcher pushes agent commits after a 30s quiet period
+7. **Final push** — catches anything the watcher missed (runs even on failure)
 
-The goose agent never sees git credentials — only the harness binary pushes.
+The agent commits locally but never sees push credentials — only the harness binary pushes.
 
 ---
 
@@ -118,7 +119,7 @@ internal/
 
 - **Single `run` command** — no subcommands, no interactive mode. One prompt, one stage.
 - **go-git** — all git operations use `github.com/go-git/go-git/v5`. No shell-out to git CLI.
-- **Credential isolation** — Hub and git credentials are used by the harness only, cleared before goose starts.
+- **Credential isolation** — Hub and git push credentials are used by the harness only, cleared before goose starts. The agent commits locally; the harness pushes.
 - **ACP WebSocket** — connects to goose via JSON-RPC over WebSocket (ACP protocol).
 - **Exit status from ACP** — clean `SendPrompt` return = exit 0. Any error or goose crash = exit 1.
 

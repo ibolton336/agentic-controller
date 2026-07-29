@@ -36,6 +36,7 @@ For each compiler error:
 2. Read the source file
 3. Apply a minimal, conservative fix
 4. Do NOT change code that is not related to the error
+5. Run `git add -A && git commit -m "Fix: <describe what was fixed>"`
 
 Consult reference files from loaded migration skills at
 `/opt/skills/*/references/` for common error-fix mappings specific to
@@ -46,6 +47,7 @@ this migration type.
 - Fix ONLY compiler errors, not warnings
 - Minimal changes only — do not refactor working code
 - Only touch the file reported in the error
+- Commit fixes after each iteration with a message describing what was fixed
 
 ---
 
@@ -69,6 +71,9 @@ Report test results (passed/failed/total counts) but do NOT attempt
 to fix failing tests. Test failures are expected after a migration and
 are documented in the result, not fixed here.
 
+After running tests, commit any remaining changes:
+`git add -A && git commit -m "Verify: build and test results"`
+
 ---
 
 ## Important
@@ -79,3 +84,4 @@ are documented in the result, not fixed here.
 - Read `KONVEYOR_PARAM_MAX_FIX_ITERATIONS` from environment for iteration cap
 - Track how many fix iterations you have attempted
 - Report remaining errors in the result reason if build still fails
+- Commit after each fix iteration — the harness pushes your commits to the remote

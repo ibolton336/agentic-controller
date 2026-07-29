@@ -79,6 +79,10 @@ func runStage(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("clone: %w", err)
 	}
 
+	if err := git.ConfigureAuthor(repo); err != nil {
+		return fmt.Errorf("configure git author: %w", err)
+	}
+
 	if err := git.StripCredentials(repo); err != nil {
 		return fmt.Errorf("strip credentials: %w", err)
 	}
@@ -88,6 +92,19 @@ func runStage(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("checkout branch %s: %w", creds.Branch, err)
 	}
 	logging.Ok("cloned to %s, branch %s", cloneDir, creds.Branch)
+
+	if err := git.EnsureGitignore(cloneDir, []string{
+		"graphify-out/",
+		".goose/",
+		"__pycache__/",
+		"node_modules/",
+		"target/",
+		"*.tmp",
+		"*.swp",
+		"*.bak",
+	}); err != nil {
+		logging.Warn("gitignore: %v", err)
+	}
 
 	// 3b. Write analysis to workspace (if resolved from Hub)
 	if hubClient != nil {
@@ -127,13 +144,10 @@ func runStage(cmd *cobra.Command, args []string) error {
 	prompt := buildPrompt(skillContent)
 
 	// 8. Start filesystem watcher BEFORE blocking prompt
-	commitPush := func() error {
-		if _, err := git.CommitAll(repo, "konveyor: auto-commit progress"); err != nil {
-			return err
-		}
+	pushFn := func() error {
 		return git.Push(ctx, creds, repo, creds.Branch)
 	}
-	w, err := watcher.New(cloneDir, commitPush)
+	w, err := watcher.New(cloneDir, pushFn)
 	if err != nil {
 		return fmt.Errorf("create watcher: %w", err)
 	}
@@ -163,15 +177,11 @@ func runStage(cmd *cobra.Command, args []string) error {
 	// 11. Determine exit status from ACP/goose signals
 	stageFailed := err != nil || !srv.Alive()
 
-	// 12. Final commit + push (use a fresh context — the signal context
-	// may already be cancelled after SIGINT, and we must not lose the
-	// last commit)
+	// 12. Final push (use a fresh context — the signal context may
+	// already be cancelled after SIGINT)
 	logging.Header("Final Push")
 	pushCtx, pushCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer pushCancel()
-	if _, err := git.CommitAll(repo, "konveyor: stage complete"); err != nil {
-		return fmt.Errorf("final commit: %w", err)
-	}
 	if err := git.Push(pushCtx, creds, repo, creds.Branch); err != nil {
 		return fmt.Errorf("final push: %w", err)
 	}

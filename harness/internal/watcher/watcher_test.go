@@ -21,13 +21,13 @@ func TestWatcherDetectsFileChange(t *testing.T) {
 	runGit(t, dir, "add", ".")
 	runGit(t, dir, "commit", "-m", "init")
 
-	var commitCount atomic.Int32
-	commitFn := func() error {
-		commitCount.Add(1)
+	var pushCount atomic.Int32
+	pushFn := func() error {
+		pushCount.Add(1)
 		return nil
 	}
 
-	w, err := New(dir, commitFn)
+	w, err := New(dir, pushFn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,8 +47,8 @@ func TestWatcherDetectsFileChange(t *testing.T) {
 	// Wait for quiet period + buffer
 	time.Sleep(testQuietPeriod + 2*time.Second)
 
-	if commitCount.Load() == 0 {
-		t.Error("expected at least one commit after quiet period")
+	if pushCount.Load() == 0 {
+		t.Error("expected at least one push after quiet period")
 	}
 }
 
@@ -59,13 +59,13 @@ func TestWatcherIgnoresExcludedDirs(t *testing.T) {
 	runGit(t, dir, "add", ".")
 	runGit(t, dir, "commit", "-m", "init")
 
-	var commitCount atomic.Int32
-	commitFn := func() error {
-		commitCount.Add(1)
+	var pushCount atomic.Int32
+	pushFn := func() error {
+		pushCount.Add(1)
 		return nil
 	}
 
-	w, err := New(dir, commitFn)
+	w, err := New(dir, pushFn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,15 +79,15 @@ func TestWatcherIgnoresExcludedDirs(t *testing.T) {
 	}
 	defer w.Stop()
 
-	// Write to an excluded dir — should NOT trigger commit
+	// Write to an excluded dir — should NOT trigger push
 	gooseDir := filepath.Join(dir, ".goose")
 	os.MkdirAll(gooseDir, 0755)
 	writeFile(t, filepath.Join(gooseDir, "cache.db"), "data")
 
 	time.Sleep(testQuietPeriod + 2*time.Second)
 
-	if commitCount.Load() != 0 {
-		t.Error("expected no commits for changes in excluded dirs")
+	if pushCount.Load() != 0 {
+		t.Error("expected no pushes for changes in excluded dirs")
 	}
 }
 

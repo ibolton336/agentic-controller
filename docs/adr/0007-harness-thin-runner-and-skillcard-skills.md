@@ -1,4 +1,4 @@
-# ADR 0006: Harness as Thin Single-Stage Runner with SkillCard-Based Skills
+# ADR 0007: Harness as Thin Single-Stage Runner with SkillCard-Based Skills
 
 **Status:** Accepted
 **Date:** 2026-07-21
@@ -34,9 +34,10 @@ patterns to apply. Its responsibilities are:
 1. Load configuration from environment variables (`config.LoadFromEnv`)
 2. Resolve application metadata, git credentials, and analysis results
    from the Konveyor Hub API (`HUB_BASE_URL`, `HUB_TOKEN`, `APP_ID`)
-3. Clone the git repo using Hub-provided credentials, strip credentials
-   from the remote, checkout the controller-provided target branch
-   (`TARGET_BRANCH`)
+3. Clone the git repo using Hub-provided credentials, configure git
+   author for agent commits, strip push credentials from the remote,
+   inject `.gitignore` entries for build artifacts, checkout the
+   controller-provided target branch (`TARGET_BRANCH`)
 4. Write analysis insights to `.konveyor/analysis.json` (if available)
 5. Clear Hub credentials from the environment
 6. Start `goose serve` with LLM provider credentials
@@ -47,11 +48,11 @@ patterns to apply. Its responsibilities are:
    - `KONVEYOR_PLAYBOOK_INSTRUCTIONS` — playbook guide context
    - Skill content (concatenated from all discovered skills)
    - `KONVEYOR_INSTRUCTIONS` — stage-specific task
-10. Start a filesystem watcher for incremental commit+push
+10. Start a filesystem watcher for incremental push
 11. Send one ACP prompt and block until completion
 12. Stop watcher, determine exit status from ACP completion (error =
     failure, clean return = success)
-13. Final commit+push — push failure is fatal (exit 1)
+13. Final push — push failure is fatal (exit 1)
 
 No interactive commands, no file-based config, no multi-turn recipe
 execution.
@@ -59,11 +60,12 @@ execution.
 #### Credential isolation
 
 Hub credentials (`HUB_BASE_URL`, `HUB_TOKEN`, `APP_ID`) are cleared
-from the environment after resolution via `hub.ClearEnv()`. Git
+from the environment after resolution via `hub.ClearEnv()`. Git push
 credentials are stripped from the cloned repo's remote. Both happen
 before goose starts. This is a deliberate security boundary — goose
 and any skill content it executes cannot access Hub or push
-credentials. Only the harness binary pushes to git.
+credentials. The agent commits locally (a credential-free operation);
+only the harness binary pushes to the remote.
 
 ### Two kinds of skills: stage and domain
 
@@ -111,59 +113,43 @@ This means:
 
 ### Image hierarchy
 
-Five images, two intermediate bases. Image names include the language
-suffix for multi-language support:
+One base image, one image per language. All stages for a language
+share the same image:
 
 ```
-agent-base (UBI 10 + goose + git + harness binary)
-├── agent-plan (+ Python 3, graphify — language-agnostic)
-├── agent-java-base (+ JDK 21, Maven)
-│   ├── agent-execute-java
-│   └── agent-verify-java
+agent-base (UBI + goose + git + graphify + harness binary)
+├── agent-java (+ JDK 21, Maven)
+├── agent-csharp (+ .NET SDK)
+├── agent-go (+ Go toolchain)
+├── agent-nodejs (+ Node.js)
 ```
 
-Graphify is language-agnostic and supports multiple languages, so
-`agent-plan` is shared across all migration types. Execute and verify
-images are language-specific — adding a new language (e.g., Go) means
-new `agent-go-base`, `agent-execute-go`, and `agent-verify-go` images.
-No harness or controller changes required.
-
-Execute and verify share the same language base since both need the
-build toolchain. They are separate images (currently identical) to
-allow future divergence (e.g., verify may add test frameworks or
-coverage tools).
+Adding a new language means a new `agent-<lang>` image. No harness
+or controller changes required.
 
 ### Filesystem watcher
 
 A background goroutine watches the working directory using fsnotify and
-commits+pushes after a 30-second quiet period (no new file writes).
-This provides the "constant pushing to git" guarantee without goose
-needing git credentials.
+pushes after a 30-second quiet period (no new file writes). The agent
+makes commits with descriptive messages as part of its skill
+instructions; the watcher pushes those commits to the remote using
+credentials the agent cannot access.
 
-The watcher uses targeted staging:
-- `git add -u` for tracked files
-- Selective staging of new files matching known source patterns
-- Respects `.gitignore` for binary/build artifacts
-- Excludes `.goose/`, `__pycache__/`, `graphify-out/`, `node_modules/`
+The watcher excludes irrelevant directories (`.goose/`, `__pycache__/`,
+`graphify-out/`, `node_modules/`) to avoid triggering on noise.
 
-A final commit+push after goose exits catches anything the watcher
-missed, including `.konveyor/` state files.
+A final push after goose exits catches anything the watcher missed.
 
-The 30-second quiet period is a reasonable default for all stages. The
-`WithQuietPeriod()` Go API allows overriding it. If noisy intermediate
-commits become a problem (e.g., during execute where goose may pause
-30+ seconds between file migrations), a `KONVEYOR_WATCHER_QUIET_PERIOD`
-env var can be added to tune it per stage — deferred until there is a
-real complaint.
+The 30-second quiet period is a reasonable default for all stages.
 
 ### Cross-stage state via git
 
 Git is the shared state boundary. Each stage clones the repo and reads
 artifacts left by prior stages:
 
-- Plan writes: `PLAN.md`, `graph.json`
-- Execute reads: `PLAN.md`. Writes: migrated source files
-- Verify reads: migrated source. Writes: fix patches
+- Plan writes and commits: `PLAN.md`, `graph.json`
+- Execute reads: `PLAN.md`. Writes and commits: migrated source files
+- Verify reads: migrated source. Writes and commits: fix patches
 
 #### Exit status
 
@@ -175,23 +161,6 @@ branch — if the push didn't land, the next stage has no artifacts to
 work with. The harness does not read any skill-written status file —
 git commits are the primary cross-stage context. Quality assessment
 is the eval stage's responsibility, not the harness's.
-
-#### handoff.md
-
-The harness writes `.konveyor/handoff.md` after each stage with
-status, skills loaded, and file counts. Git commits are the primary
-cross-stage context — handoff.md supplements them with metadata that
-isn't in the diff. If git commits prove insufficient for agent
-consumption, handoff.md can be redesigned for machine readability.
-
-### Stage timeout
-
-The harness will support a `KONVEYOR_STAGE_TIMEOUT` env var (default:
-60 minutes). When the timeout fires, `SendPrompt` returns via context
-cancellation, the harness performs the final commit+push to preserve
-partial work, and exits 1. This provides graceful timeout with artifact
-preservation, versus the Sandbox's `activeDeadlineSeconds` which kills
-the pod hard and loses uncommitted progress.
 
 ### Context window scaling
 
@@ -216,7 +185,6 @@ sender regardless of project size.
 | `harness/recipes/` | Content folded into skills |
 | `harness/skill-bundle/` | Replaced by OCI-packaged SkillCards |
 | `images/agent-base-goose/`, `images/agent-java-goose/` | Superseded by new image hierarchy |
-| `docs/superpowers/` | Replaced by this ADR |
 
 ## Alternatives Considered
 
@@ -263,6 +231,21 @@ Skill-level chunking (the skill itself decides how to batch work)
 keeps the harness thin and puts the complexity where domain knowledge
 lives.
 
+### Harness commits instead of agent
+
+The harness commits on behalf of the agent using go-git with a fixed
+author signature, triggered by a filesystem watcher after a quiet
+period.
+
+Rejected because: produces generic commit messages
+(`"konveyor: auto-commit progress"`) that obscure what changed. The
+agent has the context to write meaningful commit messages per step.
+Commit is a local operation that requires no credentials, so the
+security boundary (push credentials stay in the harness) is preserved.
+The harness injects `user.name` and `user.email` via
+`git.ConfigureAuthor` and `.gitignore` entries for build artifacts so
+the agent can commit safely.
+
 ### Controller reads status files from git
 
 The controller clones the git branch or reads status files from the
@@ -297,23 +280,16 @@ reconciler that watches pod exit codes.
   immediately with an error.
 
 - **Image builds require dependency ordering.** CI must build
-  `agent-base` before `agent-plan`, and `agent-java-base` before
-  `agent-execute-java`/`agent-verify-java`. The Makefile encodes
-  these dependencies.
+  `agent-base` before any language image (`agent-java`, `agent-go`,
+  etc.). The Makefile encodes these dependencies.
 
 - **Multi-language via image naming.** Image names include the
-  language suffix (`agent-execute-java`, `agent-execute-go`). The
-  plan image is shared across languages since graphify is
-  language-agnostic.
+  language suffix (`agent-java`, `agent-go`). The base image is
+  shared across all languages.
 
 - **Test harness scaffolding.** `hack/harness-test/setup.sh` builds
   skill OCI images locally, loads them into Kind, and applies
   SkillCard + Agent + AgentPlaybook + AgentPlaybookRun CRs for
   end-to-end testing.
 
-## Planned work
 
-| Item | Description |
-|------|-------------|
-| handoff.md redesign | Redesign for machine readability if git commits prove insufficient for cross-stage context |
-| Stage timeout | Implement `KONVEYOR_STAGE_TIMEOUT` env var |
