@@ -15,8 +15,8 @@ NS=konveyor-agents
 # Real Konveyor Hub the shim reads the application inventory from. A
 # port-forward gives the laptop a stable HUB_URL; in-cluster this would be
 # the Hub service DNS. If Hub is unreachable the shim falls back to a stub.
-HUB_NS="${HUB_NS:-konveyor}"
-HUB_SVC="${HUB_SVC:-tackle2-hub}"
+HUB_NS="${HUB_NS:-konveyor-tackle}"
+HUB_SVC="${HUB_SVC:-tackle-hub}"
 HUB_LOCAL_PORT="${HUB_LOCAL_PORT:-18090}"
 
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; }

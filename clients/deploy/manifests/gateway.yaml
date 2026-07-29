@@ -21,13 +21,17 @@ rules:
   - apiGroups: ["konveyor.io"]
     resources: ["agents", "skillcards", "skillcollections", "agentplaybooks"]
     verbs: ["get", "list", "create", "update", "delete"]
-  # Read-only: model pickers; providers are cluster-admin-owned.
+  # Providers are cluster-admin-owned — the API surface is read-only.
+  # "create" exists ONLY for POST /api/defaults, which seeds the default
+  # LLMProvider (create-only; existing providers are never touched).
   - apiGroups: ["konveyor.io"]
     resources: ["llmproviders"]
-    verbs: ["get", "list"]
+    verbs: ["get", "list", "create"]
+  # get: ACP key Secrets. create/update: the hub-token Secret upsert the
+  # defaults seeding performs (ensureHubTokenSecret).
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get"]
+    verbs: ["get", "create", "update"]
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list"]

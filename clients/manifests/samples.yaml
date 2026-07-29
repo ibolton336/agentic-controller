@@ -68,6 +68,8 @@ kind: SkillCard
 metadata:
   name: analyze-java-ee
   namespace: konveyor-agents
+  labels:
+    konveyor.io/managed: "true"
 spec:
   displayName: Analyze Java EE application
   description: Identify Java EE APIs in use and map each to its Jakarta/cloud-native replacement.
@@ -83,6 +85,8 @@ kind: SkillCard
 metadata:
   name: cloud-readiness-rules
   namespace: konveyor-agents
+  labels:
+    konveyor.io/managed: "true"
 spec:
   displayName: Cloud readiness ground rules
   description: Always-loaded constraints the agent must respect while analyzing.
@@ -103,6 +107,8 @@ kind: SkillCollection
 metadata:
   name: migration-skills
   namespace: konveyor-agents
+  labels:
+    konveyor.io/managed: "true"
 spec:
   # Each entry references exactly one of skillCardRef | image | source.
   skills:

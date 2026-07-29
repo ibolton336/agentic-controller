@@ -43,6 +43,8 @@ kind: SkillCard
 metadata:
   name: execute
   namespace: konveyor-agents
+  labels:
+    konveyor.io/managed: "true"
 spec:
   displayName: Execute migration
   description: Stage skill — read PLAN.md and migrate file-by-file, no builds.
@@ -54,6 +56,8 @@ kind: SkillCard
 metadata:
   name: javaee-to-quarkus
   namespace: konveyor-agents
+  labels:
+    konveyor.io/managed: "true"
 spec:
   displayName: Java EE to Quarkus
   description: Domain skill — annotation/config/dependency maps for the Quarkus target.
