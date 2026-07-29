@@ -14,7 +14,6 @@ func clearKonveyorEnv(t *testing.T) {
 		"KONVEYOR_MODEL_PRIMARY_ENDPOINT",
 		"KONVEYOR_MODEL_PRIMARY_API_KEY",
 		"KONVEYOR_PARAM_MAX_TURNS",
-		"KONVEYOR_PARAM_MAX_FIX_ITERATIONS",
 		"HUB_BASE_URL",
 		"HUB_TOKEN",
 		"APP_ID",
@@ -92,7 +91,6 @@ func TestLoadFromEnv(t *testing.T) {
 		clearKonveyorEnv(t)
 		setRequiredEnv(t)
 		t.Setenv("KONVEYOR_PARAM_MAX_TURNS", "500")
-		t.Setenv("KONVEYOR_PARAM_MAX_FIX_ITERATIONS", "7")
 
 		cfg, err := LoadFromEnv()
 		if err != nil {
@@ -100,9 +98,6 @@ func TestLoadFromEnv(t *testing.T) {
 		}
 		if cfg.MaxTurns != 500 {
 			t.Errorf("MaxTurns = %d, want 500", cfg.MaxTurns)
-		}
-		if cfg.MaxFixIterations != 7 {
-			t.Errorf("MaxFixIterations = %d, want 7", cfg.MaxFixIterations)
 		}
 	})
 }

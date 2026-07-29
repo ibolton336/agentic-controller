@@ -144,7 +144,11 @@ func (w *Watcher) addDirRecursive(dir string) error {
 			if excludeDirs[name] {
 				return filepath.SkipDir
 			}
-			return w.fsw.Add(path)
+			if err := w.fsw.Add(path); err != nil {
+				logging.Warn("watcher: skipping %s: %v", path, err)
+				return nil
+			}
+			return nil
 		}
 		return nil
 	})
