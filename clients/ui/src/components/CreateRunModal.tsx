@@ -100,6 +100,9 @@ export function CreateRunModal({ api, onClose, onCreated }: CreateRunModalProps)
   };
 
   const userParams = selected?.spec.params ?? [];
+  // The shim refuses application-scoped creates when the inventory is the
+  // offline stub — stub applications have no Hub behind them to pull from.
+  const stubInventory = inventory.source === "stub";
   const application = applications.find((a) => a.id === applicationId);
   const skillless = !!application && skillCount(selected) === 0;
   // The inverse mismatch: an agent that mounts skills runs the migration
@@ -242,11 +245,22 @@ export function CreateRunModal({ api, onClose, onCreated }: CreateRunModalProps)
               >
                 <FormSelectOption value="" label="None — run without an application" />
                 {applications.map((a) => (
-                  <FormSelectOption key={a.id} value={a.id} label={`${a.name}  ·  Hub #${a.id}`} />
+                  <FormSelectOption
+                    key={a.id}
+                    value={a.id}
+                    label={`${a.name}  ·  Hub #${a.id}`}
+                    isDisabled={stubInventory}
+                  />
                 ))}
               </FormSelect>
               <FormHelperText>
                 <HelperText>
+                  {stubInventory && (
+                    <HelperTextItem variant="warning">
+                      Stub applications cannot back a run — the sandbox needs a reachable Hub.
+                      Only "None" is usable until the Hub connects.
+                    </HelperTextItem>
+                  )}
                   <HelperTextItem>
                     The harness pulls this application's repository, credentials, and analysis
                     from the Hub at start. Migration agents fail without one; leave unset only

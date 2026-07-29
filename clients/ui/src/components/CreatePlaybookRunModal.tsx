@@ -58,13 +58,12 @@ function isSelectable(pb: AgentPlaybook): boolean {
 }
 
 /**
- * INTERSECTION of the stage Agents' declared params, in stage order. Params
- * forward wholesale to every stage's AgentRun, and the controller marks a
- * stage Failed (InvalidParams) for any param its Agent doesn't declare — so
- * a param declared by only SOME stages can never be safely sent, and the
- * form must not offer it (the shim rejects it with a 400 anyway). First
+ * UNION of the stage Agents' declared params, in stage order. First
  * declaration wins the description/type/default (later defaults fill a
- * hole); required anywhere means required.
+ * hole); required anywhere means required. Params forward wholesale to
+ * every stage's AgentRun, so only params declared by EVERY stage agent
+ * (see stagesMissingParam) are settable — the rest render disabled and
+ * are never submitted (the shim rejects them with a 400 anyway).
  */
 function mergeParams(agents: AgentResource[]): AgentParam[] {
   const merged = new Map<string, AgentParam>();
@@ -80,9 +79,14 @@ function mergeParams(agents: AgentResource[]): AgentParam[] {
       if (!prev.description && p.description) prev.description = p.description;
     }
   }
-  return [...merged.values()].filter((p) =>
-    agents.every((a) => (a.spec.params ?? []).some((q) => q.name === p.name)),
-  );
+  return [...merged.values()];
+}
+
+/** Names of the stage agents that do NOT declare the given param. */
+function stagesMissingParam(agents: AgentResource[], name: string): string[] {
+  return agents
+    .filter((a) => !(a.spec.params ?? []).some((q) => q.name === name))
+    .map((a) => a.metadata.name ?? "(unnamed)");
 }
 
 function defaultsFor(params: AgentParam[]): Record<string, string> {
@@ -157,7 +161,15 @@ export function CreatePlaybookRunModal({ api, onClose, onCreated }: CreatePlaybo
   const selectedReady = selected ? isSelectable(selected) : false;
   const notReady = selected && !selectedReady ? readyCondition(selected) : undefined;
 
-  const userParams = mergeParams(stageAgents ?? []);
+  const mergedParams = mergeParams(stageAgents ?? []);
+  // Only params declared by EVERY stage agent can be sent (params forward
+  // wholesale to each stage); the rest render disabled below.
+  const universalParams = mergedParams.filter(
+    (p) => stagesMissingParam(stageAgents ?? [], p.name).length === 0,
+  );
+  // The shim refuses application-scoped creates when the inventory is the
+  // offline stub — stub applications have no Hub behind them to pull from.
+  const stubInventory = inventory.source === "stub";
   const application = applications.find((a) => a.id === applicationId);
   // A stage agent with zero skills dooms its stage under the migration
   // harness (fatal at startup) — surface it before Create, not after.
@@ -167,15 +179,6 @@ export function CreatePlaybookRunModal({ api, onClose, onCreated }: CreatePlaybo
   const skilledNoApp =
     !application && (stageAgents ?? []).some((a) => skillCount(a) > 0);
   const repoMissing = !!application && !application.repository?.url;
-  // spec.models applies to every stage with no per-stage overrides, so the
-  // stage Agents must agree on a provider — the shim 400s disagreement;
-  // pre-check it here so Create is disabled with the reason visible.
-  const stageProviderRefs = [
-    ...new Set(
-      (stageAgents ?? []).map((a) => a.spec.providers?.[0]?.ref).filter((r): r is string => !!r),
-    ),
-  ];
-  const providersDisagree = stageProviderRefs.length > 1;
   // The picker offers only providers EVERY stage agent declares (one model
   // selection forwards to every stage), in the first stage agent's
   // declaration order — mirroring the default policy's ordering.
@@ -185,9 +188,20 @@ export function CreatePlaybookRunModal({ api, onClose, onCreated }: CreatePlaybo
       : [...new Set((stageAgents[0]?.spec.providers ?? []).map((p) => p.ref))].filter((ref) =>
           stageAgents.every((a) => (a.spec.providers ?? []).some((q) => q.ref === ref)),
         );
+  // spec.models applies to every stage with no per-stage overrides. The shim
+  // resolves the default from the INTERSECTION of the stage agents' full
+  // provider lists and accepts any explicit model whose provider every stage
+  // agent declares — so only an EMPTY intersection blocks create (when at
+  // least one stage agent declares providers at all).
+  const providersDisagree =
+    stageAgents !== null &&
+    stageAgents.some((a) => (a.spec.providers ?? []).length > 0) &&
+    allowedProviderRefs.length === 0;
 
-  const missingRequired = userParams.filter((p) => p.required && !(paramValues[p.name] ?? "").trim());
-  const paramsInvalid = userParams.some(
+  const missingRequired = universalParams.filter(
+    (p) => p.required && !(paramValues[p.name] ?? "").trim(),
+  );
+  const paramsInvalid = universalParams.some(
     (p) => paramValueInvalidReason(p, paramValues[p.name] ?? "") !== undefined,
   );
   // Mirror the shim's validation: with an application, the shared target
@@ -213,15 +227,22 @@ export function CreatePlaybookRunModal({ api, onClose, onCreated }: CreatePlaybo
     setSubmitting(true);
     setSubmitError(null);
     try {
-      // Send only values the user actually changed: an untouched default is
-      // omitted so each stage's own Agent default applies (the upstream
-      // testbed sends no params at all) — and a param equal to its merged
-      // default adds nothing but noise to the immutable spec.
-      const mergedDefaults = defaultsFor(userParams);
+      // Send only universal params (the shim 400s params not declared by
+      // every stage agent). Omit a value only when it is empty, or when it
+      // equals the merged default AND every stage agent's declaration
+      // carries that same default — a value that some stage would default
+      // differently must be sent even if it matches the merged default.
       const params: Record<string, string> = {};
-      for (const p of userParams) {
+      for (const p of universalParams) {
         const v = (paramValues[p.name] ?? "").trim();
-        if (v && v !== (mergedDefaults[p.name] ?? "").trim()) params[p.name] = v;
+        if (!v) continue;
+        const uniformDefault =
+          p.default !== undefined &&
+          (stageAgents ?? []).every((a) =>
+            (a.spec.params ?? []).some((q) => q.name === p.name && q.default === p.default),
+          );
+        if (uniformDefault && v === (p.default ?? "").trim()) continue;
+        params[p.name] = v;
       }
       const created = await api.createPlaybookRun({
         playbookRef: selected.metadata.name ?? playbookName,
@@ -350,11 +371,22 @@ export function CreatePlaybookRunModal({ api, onClose, onCreated }: CreatePlaybo
               >
                 <FormSelectOption value="" label="None — run without an application" />
                 {applications.map((a) => (
-                  <FormSelectOption key={a.id} value={a.id} label={`${a.name}  ·  Hub #${a.id}`} />
+                  <FormSelectOption
+                    key={a.id}
+                    value={a.id}
+                    label={`${a.name}  ·  Hub #${a.id}`}
+                    isDisabled={stubInventory}
+                  />
                 ))}
               </FormSelect>
               <FormHelperText>
                 <HelperText>
+                  {stubInventory && (
+                    <HelperTextItem variant="warning">
+                      Stub applications cannot back a run — the sandbox needs a reachable Hub.
+                      Only "None" is usable until the Hub connects.
+                    </HelperTextItem>
+                  )}
                   <HelperTextItem>
                     Every stage's harness pulls this application's repository, credentials, and
                     analysis from the Hub. Migration playbooks fail without one.
@@ -388,10 +420,10 @@ export function CreatePlaybookRunModal({ api, onClose, onCreated }: CreatePlaybo
             )}
 
             {providersDisagree && (
-              <Alert variant="danger" isInline title="Stage agents disagree on LLM providers">
-                {stageProviderRefs.join(", ")} — a playbook run's model selection applies to
-                every stage and per-stage overrides do not exist, so the stage agents must share
-                one provider.
+              <Alert variant="danger" isInline title="Stage agents share no LLM provider">
+                The stage agents' declared provider lists have no ref in common — a playbook
+                run's model applies to every stage with no per-stage overrides, so neither a
+                default nor an explicit selection can apply to every stage.
               </Alert>
             )}
 
@@ -418,25 +450,37 @@ export function CreatePlaybookRunModal({ api, onClose, onCreated }: CreatePlaybo
 
             {application && <HarnessPullsPreview application={application} />}
 
-            {userParams.map((p) => {
+            {mergedParams.map((p) => {
+              const missingStages = stagesMissingParam(stageAgents ?? [], p.name);
+              const partial = missingStages.length > 0;
               const helper = paramHelperText(p);
-              const invalidReason = paramValueInvalidReason(p, paramValues[p.name] ?? "");
+              const invalidReason = partial
+                ? undefined
+                : paramValueInvalidReason(p, paramValues[p.name] ?? "");
               return (
                 <FormGroup
                   key={p.name}
                   label={p.name}
-                  isRequired={p.required}
+                  isRequired={!partial && p.required}
                   fieldId={`pb-param-${p.name}`}
                 >
                   <ParamValueField
                     id={`pb-param-${p.name}`}
                     param={p}
                     value={paramValues[p.name] ?? ""}
+                    isDisabled={partial}
                     onChange={(v) => setParamValues((prev) => ({ ...prev, [p.name]: v }))}
                   />
-                  {(helper || invalidReason) && (
+                  {(partial || helper || invalidReason) && (
                     <FormHelperText>
                       <HelperText>
+                        {partial && (
+                          <HelperTextItem variant="warning">
+                            not declared by stage{missingStages.length === 1 ? "" : "s"}{" "}
+                            {missingStages.join(", ")} — cannot be set on a playbook run (params
+                            forward to every stage)
+                          </HelperTextItem>
+                        )}
                         {invalidReason && (
                           <HelperTextItem variant="error">{invalidReason}</HelperTextItem>
                         )}

@@ -32,7 +32,11 @@ import type {
   AgentPlaybookRun,
   AgentPlaybookRunStage,
 } from "@konveyor/agentic-client/contract";
-import { defaultTargetBranch, isTerminalPhase } from "@konveyor/agentic-client/contract";
+import {
+  defaultTargetBranch,
+  invalidTargetBranchReason,
+  isTerminalPhase,
+} from "@konveyor/agentic-client/contract";
 import type { ShimClient } from "@konveyor/agentic-client/transport-shim";
 import { errorMessage, formatAge } from "../format";
 import { PhaseLabel } from "./PhaseLabel";
@@ -105,7 +109,10 @@ export function PlaybookRunDetailPage({
       setFetchError(null);
     } catch (err) {
       const msg = errorMessage(err);
-      if (msg.includes("404") || msg.toLowerCase().includes("not found")) {
+      // Only a transport-level 404 means the run is gone for good; anything
+      // else (transient 5xx, network hiccups, runs whose names contain
+      // "404") surfaces as the danger alert while polling continues.
+      if (/HTTP 404\b/.test(msg)) {
         setGone(true);
       }
       setFetchError(msg);
@@ -145,8 +152,17 @@ export function PlaybookRunDetailPage({
     setRerunOpen(true);
   };
 
-  const canRerun =
-    run !== null && (!coordinates.appId || rerunBranch.trim() !== "") && !rerunSubmitting;
+  // Mirror CreateRunModal's gating: with an application, the target branch
+  // must be a valid git refname and differ from the application's source
+  // branch — otherwise the shim rejects on submit.
+  const rerunBranchReason = !coordinates.appId
+    ? undefined
+    : invalidTargetBranchReason(rerunBranch) ??
+      (application?.repository?.branch !== undefined &&
+      rerunBranch.trim() === application.repository.branch
+        ? "must differ from the application's source branch"
+        : undefined);
+  const canRerun = run !== null && rerunBranchReason === undefined && !rerunSubmitting;
 
   const submitRerun = async () => {
     if (!run || !canRerun) return;
@@ -414,15 +430,16 @@ export function PlaybookRunDetailPage({
                     id="rerun-playbook-target-branch"
                     isRequired
                     value={rerunBranch}
-                    validated={rerunBranch.trim() === "" ? "error" : "default"}
+                    validated={rerunBranchReason !== undefined ? "error" : "default"}
                     onChange={(_e, v) => setRerunBranch(v)}
                   />
                   <FormHelperText>
                     <HelperText>
-                      <HelperTextItem variant={rerunBranch.trim() === "" ? "error" : "default"}>
-                        {rerunBranch.trim() === ""
-                          ? "Required."
-                          : "Keep it to continue that branch's work; change it (e.g. Generate new) for a fresh start."}
+                      <HelperTextItem
+                        variant={rerunBranchReason !== undefined ? "error" : "default"}
+                      >
+                        {rerunBranchReason ??
+                          "Keep it to continue that branch's work; change it (e.g. Generate new) for a fresh start."}
                       </HelperTextItem>
                     </HelperText>
                   </FormHelperText>

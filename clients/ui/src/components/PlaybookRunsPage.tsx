@@ -7,6 +7,11 @@ import {
   EmptyStateActions,
   EmptyStateBody,
   EmptyStateFooter,
+  Modal,
+  ModalBody,
+  ModalFooter,
+  ModalHeader,
+  ModalVariant,
   PageSection,
   Spinner,
   Title,
@@ -14,7 +19,7 @@ import {
   ToolbarContent,
   ToolbarItem,
 } from "@patternfly/react-core";
-import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
+import { ActionsColumn, Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
 import CubesIcon from "@patternfly/react-icons/dist/esm/icons/cubes-icon";
 import type { AgentPlaybookRun } from "@konveyor/agentic-client/contract";
 import type { ShimClient } from "@konveyor/agentic-client/transport-shim";
@@ -50,6 +55,9 @@ export function PlaybookRunsPage({ api, onOpenPlaybookRun }: PlaybookRunsPagePro
   const [runs, setRuns] = useState<AgentPlaybookRun[] | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [isCreateOpen, setCreateOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const inFlight = useRef(false);
 
   const refresh = useCallback(async () => {
@@ -74,6 +82,21 @@ export function PlaybookRunsPage({ api, onOpenPlaybookRun }: PlaybookRunsPagePro
     const timer = setInterval(() => void refresh(), POLL_MS);
     return () => clearInterval(timer);
   }, [refresh]);
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await api.deletePlaybookRun(deleteTarget);
+      setDeleteTarget(null);
+      void refresh();
+    } catch (err) {
+      setDeleteError(errorMessage(err));
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   return (
     <PageSection>
@@ -130,6 +153,7 @@ export function PlaybookRunsPage({ api, onOpenPlaybookRun }: PlaybookRunsPagePro
               <Th>Stages</Th>
               <Th>Age</Th>
               <Th>Duration</Th>
+              <Th screenReaderText="Actions" />
             </Tr>
           </Thead>
           <Tbody>
@@ -156,6 +180,19 @@ export function PlaybookRunsPage({ api, onOpenPlaybookRun }: PlaybookRunsPagePro
                   </Td>
                   <Td dataLabel="Age">{formatAge(run.metadata.creationTimestamp)}</Td>
                   <Td dataLabel="Duration">{formatSeconds(playbookDuration(run))}</Td>
+                  <Td isActionCell>
+                    <ActionsColumn
+                      items={[
+                        {
+                          title: "Delete",
+                          onClick: () => {
+                            setDeleteError(null);
+                            setDeleteTarget(name);
+                          },
+                        },
+                      ]}
+                    />
+                  </Td>
                 </Tr>
               );
             })}
@@ -173,6 +210,44 @@ export function PlaybookRunsPage({ api, onOpenPlaybookRun }: PlaybookRunsPagePro
           }}
         />
       )}
+
+      <Modal
+        variant={ModalVariant.small}
+        isOpen={deleteTarget !== null}
+        onClose={() => {
+          if (!deleting) setDeleteTarget(null);
+        }}
+        aria-labelledby="delete-playbook-run-list-title"
+      >
+        <ModalHeader title="Delete AgentPlaybookRun?" labelId="delete-playbook-run-list-title" />
+        <ModalBody>
+          {deleteError && (
+            <Alert
+              variant="danger"
+              isInline
+              title="Delete failed"
+              style={{ marginBottom: "1rem" }}
+            >
+              {deleteError}
+            </Alert>
+          )}
+          Delete playbook run <strong>{deleteTarget}</strong>? Its stage AgentRuns are
+          owner-referenced and cascade with it via ownerRefs.
+        </ModalBody>
+        <ModalFooter>
+          <Button
+            variant="danger"
+            isLoading={deleting}
+            isDisabled={deleting}
+            onClick={() => void confirmDelete()}
+          >
+            Delete
+          </Button>
+          <Button variant="link" isDisabled={deleting} onClick={() => setDeleteTarget(null)}>
+            Cancel
+          </Button>
+        </ModalFooter>
+      </Modal>
     </PageSection>
   );
 }

@@ -52,7 +52,7 @@ export function parseGitHubRepo(repoUrl?: string): { owner: string; repo: string
 /** Web URL of a branch on the repo's host; undefined when the host shape is unknown. */
 export function repoBranchUrl(repoUrl: string | undefined, branch: string): string | undefined {
   if (!repoUrl) return undefined;
-  const base = repoUrl.trim().replace(/\.git$/, "").replace(/\/+$/, "");
+  const base = repoUrl.trim().replace(/\/+$/, "").replace(/\.git$/, "");
   const gh = parseGitHubRepo(repoUrl);
   if (gh) return `${base}/tree/${encodeURIComponent(branch)}`;
   if (/^https?:\/\/(?:www\.)?gitlab\.com\//.test(base)) {
@@ -68,7 +68,7 @@ export function repoFileUrl(
   path: string,
 ): string | undefined {
   if (!repoUrl) return undefined;
-  const base = repoUrl.trim().replace(/\.git$/, "").replace(/\/+$/, "");
+  const base = repoUrl.trim().replace(/\/+$/, "").replace(/\.git$/, "");
   const encodedPath = path.split("/").map(encodeURIComponent).join("/");
   if (parseGitHubRepo(repoUrl)) {
     return `${base}/blob/${encodeURIComponent(branch)}/${encodedPath}`;

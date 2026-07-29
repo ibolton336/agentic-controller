@@ -8,7 +8,7 @@
  */
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
-import { Alert, Label, Title } from "@patternfly/react-core";
+import { Alert, Button, Label, Title } from "@patternfly/react-core";
 import type { Application } from "@konveyor/agentic-client/contract";
 import { formatAge, parseGitHubRepo, repoBranchUrl, repoFileUrl, truncate } from "../format";
 
@@ -70,6 +70,8 @@ export function BranchPanel({
   const [feed, setFeed] = useState<FeedState>("loading");
   /** path -> known presence; unknown (unchecked or 403-skipped) keys absent. */
   const [filePresence, setFilePresence] = useState<Record<string, boolean>>({});
+  /** Manual re-fetch trigger for terminal runs (no interval to retry for them). */
+  const [retryNonce, setRetryNonce] = useState(0);
 
   useEffect(() => {
     if (!owner || !repo) return;
@@ -155,7 +157,7 @@ export function BranchPanel({
       disposed = true;
       if (timer) clearInterval(timer);
     };
-  }, [owner, repo, targetBranch, isTerminal]);
+  }, [owner, repo, targetBranch, isTerminal, retryNonce]);
 
   const branchCode = <code>{targetBranch}</code>;
 
@@ -218,9 +220,20 @@ export function BranchPanel({
               title="GitHub API rate limit reached — commit feed paused"
             />
           )}
-          {feed === "network-error" && (
-            <div style={muted}>commit feed unavailable (network error) — retrying</div>
-          )}
+          {feed === "network-error" &&
+            // While the run is live the interval genuinely retries; terminal
+            // runs fetch exactly once, so offer a manual retry instead of a
+            // "retrying" claim that would never come true.
+            (isTerminal ? (
+              <div style={muted}>
+                commit feed unavailable (network error){" "}
+                <Button variant="link" isInline onClick={() => setRetryNonce((n) => n + 1)}>
+                  Retry
+                </Button>
+              </div>
+            ) : (
+              <div style={muted}>commit feed unavailable (network error) — retrying</div>
+            ))}
           {feed === "ok" && commits !== null && commits.length === 0 && (
             <div style={muted}>no commits on this branch yet</div>
           )}

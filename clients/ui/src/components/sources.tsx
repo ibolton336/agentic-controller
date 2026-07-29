@@ -417,18 +417,27 @@ export function ParamValueField({
   param,
   value,
   onChange,
+  isDisabled,
 }: {
   id: string;
   param: AgentParam;
   value: string;
   onChange: (value: string) => void;
+  isDisabled?: boolean;
 }) {
   if (param.type === "boolean") {
     return (
       <Checkbox
         id={id}
-        label={value === "true" ? "true" : "false"}
+        label={
+          value === "true"
+            ? "true"
+            : value === "false"
+              ? "false"
+              : "not set (agent default applies)"
+        }
         isChecked={value === "true"}
+        isDisabled={isDisabled}
         onChange={(_e, checked) => onChange(checked ? "true" : "false")}
       />
     );
@@ -440,6 +449,7 @@ export function ParamValueField({
       type={param.type === "number" ? "number" : "text"}
       isRequired={param.required}
       value={value}
+      isDisabled={isDisabled}
       validated={invalid ? "error" : "default"}
       onChange={(_e, v) => onChange(v)}
     />
@@ -464,6 +474,8 @@ export function runHubCoordinates(env: EnvVar[] | undefined): {
     appId: runEnvValue(env, RUN_ENV.APP_ID),
     targetBranch: runEnvValue(env, RUN_ENV.TARGET_BRANCH),
     hubBaseUrl: runEnvValue(env, RUN_ENV.HUB_BASE_URL),
-    hasToken: runEnvValue(env, RUN_ENV.HUB_TOKEN) !== undefined,
+    // The shim injects HUB_TOKEN via valueFrom.secretKeyRef (no plain value),
+    // so presence of the env entry — not a .value — is what counts.
+    hasToken: env?.some((e) => e.name === RUN_ENV.HUB_TOKEN) ?? false,
   };
 }

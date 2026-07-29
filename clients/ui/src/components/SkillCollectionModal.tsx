@@ -316,6 +316,13 @@ export function SkillCollectionModal({
                     onChange={(_e, v) => patchMember(m.key, { skillCardRef: v })}
                   >
                     <FormSelectOption value="" label="Select a skill card" />
+                    {m.skillCardRef !== "" &&
+                      !cards.some((c) => c.metadata.name === m.skillCardRef) && (
+                        <FormSelectOption
+                          value={m.skillCardRef}
+                          label={`${m.skillCardRef} (not in the managed list)`}
+                        />
+                      )}
                     {cards.map((c) => {
                       const cardName = c.metadata.name ?? "";
                       return (

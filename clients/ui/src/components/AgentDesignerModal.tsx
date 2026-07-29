@@ -110,18 +110,20 @@ export function AgentDesignerModal({ api, agent, onClose, onSaved }: AgentDesign
   // Image: a catalog FormSelect (with a custom escape hatch) when the catalog
   // is non-empty, a plain TextInput otherwise. On edit start on the custom
   // path with the value filled in; when the catalog arrives and knows the
-  // image, snap to that entry (once — never fight the user afterwards).
+  // image, snap to that entry (once — and never after the user has touched
+  // the field, so a late catalog can't clobber an in-progress edit).
   const catalog = useImageCatalog(api);
   const [imageSelect, setImageSelect] = useState<string>(isEdit ? CUSTOM_IMAGE : "");
   const [customImage, setCustomImage] = useState(agent?.spec.image ?? "");
+  const imageTouched = useRef(false);
   const imageInitDone = useRef(false);
   useEffect(() => {
-    if (!agent || imageInitDone.current || catalog.length === 0) return;
+    if (!agent || imageInitDone.current || imageTouched.current || catalog.length === 0) return;
     imageInitDone.current = true;
-    if (catalog.some((e) => e.image === agent.spec.image)) {
-      setImageSelect(agent.spec.image);
+    if (catalog.some((e) => e.image === customImage)) {
+      setImageSelect(customImage);
     }
-  }, [catalog, agent]);
+  }, [catalog, agent, customImage]);
   const effectiveImage =
     catalog.length > 0 && imageSelect !== CUSTOM_IMAGE ? imageSelect : customImage;
 
@@ -177,6 +179,14 @@ export function AgentDesignerModal({ api, agent, onClose, onSaved }: AgentDesign
   ) => {
     set((prev) => (checked ? [...prev.filter((r) => r !== ref), ref] : prev.filter((r) => r !== ref)));
   };
+  // Refs the agent declares but the managed-filtered lists didn't return still
+  // need a row, so they stay visible and un-checkable (same as providers).
+  const unlistedCardRefs = cardRefs.filter(
+    (ref) => !(cards ?? []).some((c) => c.metadata.name === ref),
+  );
+  const unlistedCollectionRefs = collectionRefs.filter(
+    (ref) => !(collections ?? []).some((c) => c.metadata.name === ref),
+  );
 
   // Params editor rows.
   const [paramRows, setParamRows] = useState<ParamRow[]>(() => rowsFrom(agent?.spec.params));
@@ -309,7 +319,10 @@ export function AgentDesignerModal({ api, agent, onClose, onSaved }: AgentDesign
                 <FormSelect
                   id="agent-image"
                   value={imageSelect}
-                  onChange={(_e, v) => setImageSelect(v)}
+                  onChange={(_e, v) => {
+                    imageTouched.current = true;
+                    setImageSelect(v);
+                  }}
                 >
                   <FormSelectOption value="" label="Select an image…" isPlaceholder isDisabled />
                   {catalog.map((e) => (
@@ -327,7 +340,10 @@ export function AgentDesignerModal({ api, agent, onClose, onSaved }: AgentDesign
                     aria-label="Custom image reference"
                     style={{ marginTop: "0.5rem" }}
                     value={customImage}
-                    onChange={(_e, v) => setCustomImage(v)}
+                    onChange={(_e, v) => {
+                      imageTouched.current = true;
+                      setCustomImage(v);
+                    }}
                     placeholder="registry.example.com/my-agent:tag"
                   />
                 )}
@@ -337,7 +353,10 @@ export function AgentDesignerModal({ api, agent, onClose, onSaved }: AgentDesign
                 id="agent-image"
                 isRequired
                 value={customImage}
-                onChange={(_e, v) => setCustomImage(v)}
+                onChange={(_e, v) => {
+                  imageTouched.current = true;
+                  setCustomImage(v);
+                }}
                 placeholder="registry.example.com/my-agent:tag"
               />
             )}
@@ -442,68 +461,102 @@ export function AgentDesignerModal({ api, agent, onClose, onSaved }: AgentDesign
           )}
 
           <FormGroup label="Skill cards" fieldId="agent-skill-cards" role="group">
-            {cards !== null && cards.length === 0 ? (
+            {cards !== null && cards.length === 0 && unlistedCardRefs.length === 0 ? (
               <FormHelperText>
                 <HelperText>
                   <HelperTextItem>No skill cards exist yet.</HelperTextItem>
                 </HelperText>
               </FormHelperText>
             ) : (
-              (cards ?? []).map((c) => {
-                const cardName = c.metadata.name ?? "";
-                return (
+              <>
+                {(cards ?? []).map((c) => {
+                  const cardName = c.metadata.name ?? "";
+                  return (
+                    <Checkbox
+                      key={cardName}
+                      id={`agent-skill-card-${cardName}`}
+                      isChecked={cardRefs.includes(cardName)}
+                      onChange={(_e, checked) => toggleRef(setCardRefs, cardName, checked)}
+                      label={
+                        <span>
+                          {cardName}
+                          {c.spec.displayName && (
+                            <span style={{ opacity: 0.7 }}> — {c.spec.displayName}</span>
+                          )}{" "}
+                          <ReadyLabel resource={c} />
+                          {c.status?.resolvedImage && (
+                            <>
+                              {" "}
+                              <code>{truncate(c.status.resolvedImage, 50)}</code>
+                            </>
+                          )}
+                        </span>
+                      }
+                    />
+                  );
+                })}
+                {unlistedCardRefs.map((ref) => (
                   <Checkbox
-                    key={cardName}
-                    id={`agent-skill-card-${cardName}`}
-                    isChecked={cardRefs.includes(cardName)}
-                    onChange={(_e, checked) => toggleRef(setCardRefs, cardName, checked)}
+                    key={ref}
+                    id={`agent-skill-card-${ref}`}
+                    isChecked={cardRefs.includes(ref)}
+                    onChange={(_e, checked) => toggleRef(setCardRefs, ref, checked)}
                     label={
                       <span>
-                        {cardName}
-                        {c.spec.displayName && (
-                          <span style={{ opacity: 0.7 }}> — {c.spec.displayName}</span>
-                        )}{" "}
-                        <ReadyLabel resource={c} />
-                        {c.status?.resolvedImage && (
-                          <>
-                            {" "}
-                            <code>{truncate(c.status.resolvedImage, 50)}</code>
-                          </>
-                        )}
+                        {ref} (not in the managed list)
+                        <span style={{ opacity: 0.7 }}> — may be unlabeled or deleted</span>
                       </span>
                     }
                   />
-                );
-              })
+                ))}
+              </>
             )}
           </FormGroup>
 
           <FormGroup label="Skill collections" fieldId="agent-skill-collections" role="group">
-            {collections !== null && collections.length === 0 ? (
+            {collections !== null &&
+            collections.length === 0 &&
+            unlistedCollectionRefs.length === 0 ? (
               <FormHelperText>
                 <HelperText>
                   <HelperTextItem>No skill collections exist yet.</HelperTextItem>
                 </HelperText>
               </FormHelperText>
             ) : (
-              (collections ?? []).map((c) => {
-                const collectionName = c.metadata.name ?? "";
-                return (
+              <>
+                {(collections ?? []).map((c) => {
+                  const collectionName = c.metadata.name ?? "";
+                  return (
+                    <Checkbox
+                      key={collectionName}
+                      id={`agent-skill-collection-${collectionName}`}
+                      isChecked={collectionRefs.includes(collectionName)}
+                      onChange={(_e, checked) =>
+                        toggleRef(setCollectionRefs, collectionName, checked)
+                      }
+                      label={
+                        <span>
+                          {collectionName} <ReadyLabel resource={c} />
+                        </span>
+                      }
+                    />
+                  );
+                })}
+                {unlistedCollectionRefs.map((ref) => (
                   <Checkbox
-                    key={collectionName}
-                    id={`agent-skill-collection-${collectionName}`}
-                    isChecked={collectionRefs.includes(collectionName)}
-                    onChange={(_e, checked) =>
-                      toggleRef(setCollectionRefs, collectionName, checked)
-                    }
+                    key={ref}
+                    id={`agent-skill-collection-${ref}`}
+                    isChecked={collectionRefs.includes(ref)}
+                    onChange={(_e, checked) => toggleRef(setCollectionRefs, ref, checked)}
                     label={
                       <span>
-                        {collectionName} <ReadyLabel resource={c} />
+                        {ref} (not in the managed list)
+                        <span style={{ opacity: 0.7 }}> — may be unlabeled or deleted</span>
                       </span>
                     }
                   />
-                );
-              })
+                ))}
+              </>
             )}
           </FormGroup>
 
