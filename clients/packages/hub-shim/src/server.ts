@@ -651,24 +651,32 @@ async function resolveModels(
 
 /**
  * Model selection for a playbook run. spec.models applies to EVERY stage
- * and there are no per-stage overrides, so the stage Agents must agree on
- * a provider — disagreement is a 400, not a silent pick.
+ * and there are no per-stage overrides, so the pick must come from the
+ * INTERSECTION of the stage Agents' full declared provider lists (the same
+ * set an explicit selection validates against) — a provider only some
+ * stages declare would fail those stages at reconcile. An empty
+ * intersection is a 400, not a silent pick; the first stage Agent's
+ * declaration order breaks ties.
  */
 async function resolvePlaybookModels(
   playbookRef: string,
   agents: Agent[],
 ): Promise<{ models: AgentRunModelSelection[]; envFrom: EnvFromSource[] }> {
-  const providerRefs = [
-    ...new Set(agents.map((a) => a.spec.providers?.[0]?.ref).filter((r): r is string => !!r)),
-  ];
-  if (providerRefs.length === 0) return { models: [], envFrom: [] };
-  if (providerRefs.length > 1) {
+  const declaring = agents.filter((a) => (a.spec.providers ?? []).length > 0);
+  if (declaring.length === 0) return { models: [], envFrom: [] };
+  const shared = (declaring[0].spec.providers ?? [])
+    .map((p) => p.ref)
+    .filter((ref) => declaring.every((a) => (a.spec.providers ?? []).some((p) => p.ref === ref)));
+  if (shared.length === 0) {
+    const perStage = declaring
+      .map((a) => `${a.metadata.name}: ${(a.spec.providers ?? []).map((p) => p.ref).join("/")}`)
+      .join("; ");
     badRequest(
-      `playbook "${playbookRef}" stages disagree on LLM providers (${providerRefs.join(", ")}) — ` +
+      `playbook "${playbookRef}" stage Agents share no LLM provider (${perStage}) — ` +
         `spec.models applies to every stage and per-stage overrides do not exist yet`,
     );
   }
-  return resolveProviderModel(providerRefs[0], `playbook "${playbookRef}"`);
+  return resolveProviderModel(shared[0], `playbook "${playbookRef}"`);
 }
 
 /** The provider's primary-tier model (else first) + its credential Secret. */
@@ -1397,9 +1405,27 @@ async function handleApi(
   sendError(res, 404, `no route for ${pathname}`);
 }
 
+/**
+ * Request-target parse that cannot take the process down. Node's HTTP parser
+ * delivers targets WHATWG URL refuses (e.g. "//" — protocol-relative with an
+ * empty host), and the throw would be synchronous inside the listener where
+ * no promise .catch protects it — one stray request from a scanner would
+ * kill every in-flight ACP bridge.
+ */
+function safePathname(target: string | undefined): string | undefined {
+  try {
+    return new URL(target ?? "/", "http://localhost").pathname;
+  } catch {
+    return undefined;
+  }
+}
+
 const server = http.createServer((req, res) => {
-  const url = new URL(req.url ?? "/", "http://localhost");
-  const pathname = url.pathname;
+  const pathname = safePathname(req.url);
+  if (pathname === undefined) {
+    sendError(res, 400, `malformed request target ${req.url ?? ""}`);
+    return;
+  }
 
   if (pathname === "/healthz") {
     res.writeHead(200, { "content-type": "text/plain; charset=utf-8" }).end("ok");
@@ -1427,9 +1453,13 @@ const server = http.createServer((req, res) => {
   }
 
   handleApi(req, res, pathname).catch((err: unknown) => {
-    const status = k8sStatusCode(err) ?? 500;
+    // URIError = malformed percent-encoding in a path segment — a client
+    // fault (400), not a shim outage. k8s ApiExceptions keep their status
+    // and get the apiserver Status MESSAGE (k8sMessage), not the client
+    // library's multi-line blob — same contract the catalog writes honor.
+    const status = err instanceof URIError ? 400 : (k8sStatusCode(err) ?? 500);
     warn(`${req.method} ${pathname} failed: ${errorMessage(err)}`);
-    if (!res.headersSent) sendError(res, status, errorMessage(err));
+    if (!res.headersSent) sendError(res, status, k8sMessage(err));
     else res.end();
   });
 });
@@ -1590,14 +1620,29 @@ async function bridgeAcp(client: WsWebSocket, runName: string): Promise<void> {
 const wss = new WebSocketServer({ noServer: true });
 
 server.on("upgrade", (req, socket, head) => {
-  const url = new URL(req.url ?? "/", "http://localhost");
-  const match = /^\/api\/agentruns\/([^/]+)\/acp$/.exec(url.pathname);
+  // No promise .catch protects this listener — a throw here (malformed
+  // target, bad percent-encoding) would kill the process and with it every
+  // in-flight ACP bridge. Both hazards answer 400 instead.
+  const pathname = safePathname(req.url);
+  const match = pathname && /^\/api\/agentruns\/([^/]+)\/acp$/.exec(pathname);
+  if (pathname === undefined) {
+    socket.write("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+    socket.destroy();
+    return;
+  }
   if (!match) {
     socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
     socket.destroy();
     return;
   }
-  const runName = decodeURIComponent(match[1]);
+  let runName: string;
+  try {
+    runName = decodeURIComponent(match[1]);
+  } catch {
+    socket.write("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+    socket.destroy();
+    return;
+  }
   // Always accept the upgrade first so failures surface to the browser as a
   // close frame (1011 + reason) instead of an opaque handshake error.
   wss.handleUpgrade(req, socket, head, (client) => {
