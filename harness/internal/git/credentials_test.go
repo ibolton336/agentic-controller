@@ -1,6 +1,10 @@
 package git
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/go-git/go-git/v5/plumbing/transport/http"
+)
 
 func TestAuthReturnsNilForEmptyCreds(t *testing.T) {
 	c := &Credentials{}
@@ -11,9 +15,9 @@ func TestAuthReturnsNilForEmptyCreds(t *testing.T) {
 
 func TestAuthReturnsBasicAuthWithCreds(t *testing.T) {
 	c := &Credentials{Username: "user", Token: "token"}
-	auth := c.Auth()
-	if auth == nil {
-		t.Fatal("Auth() should return non-nil BasicAuth")
+	auth, ok := c.Auth().(*http.BasicAuth)
+	if !ok {
+		t.Fatal("Auth() should return a *http.BasicAuth")
 	}
 	if auth.Username != "user" {
 		t.Errorf("Username = %q, want %q", auth.Username, "user")
