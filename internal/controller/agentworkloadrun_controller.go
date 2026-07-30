@@ -36,40 +36,40 @@ import (
 )
 
 const (
-	// playbookRunRefIndexField is the field index for looking up
-	// AgentPlaybookRuns by playbookRef.
-	playbookRunRefIndexField = ".spec.playbookRef"
+	// workloadRunRefIndexField is the field index for looking up
+	// AgentWorkloadRuns by workloadRef.
+	workloadRunRefIndexField = ".spec.workloadRef"
 )
 
-// AgentPlaybookRunReconciler reconciles an AgentPlaybookRun object.
-type AgentPlaybookRunReconciler struct {
+// AgentWorkloadRunReconciler reconciles an AgentWorkloadRun object.
+type AgentWorkloadRunReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=konveyor.io,resources=agentplaybookruns,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=konveyor.io,resources=agentplaybookruns/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=konveyor.io,resources=agentplaybookruns/finalizers,verbs=update
-// +kubebuilder:rbac:groups=konveyor.io,resources=agentplaybooks,verbs=get;list;watch
+// +kubebuilder:rbac:groups=konveyor.io,resources=agentworkloadruns,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=konveyor.io,resources=agentworkloadruns/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=konveyor.io,resources=agentworkloadruns/finalizers,verbs=update
+// +kubebuilder:rbac:groups=konveyor.io,resources=agentworkloads,verbs=get;list;watch
 // +kubebuilder:rbac:groups=konveyor.io,resources=agentruns,verbs=get;list;watch;create
 
-// Reconcile handles AgentPlaybookRun reconciliation.
+// Reconcile handles AgentWorkloadRun reconciliation.
 //
-// The controller orchestrates sequential execution of playbook stages:
-// 1. Looks up the referenced AgentPlaybook
+// The controller orchestrates sequential execution of workload stages:
+// 1. Looks up the referenced AgentWorkload
 // 2. Determines the current stage from status
 // 3. Creates an AgentRun for the current stage if none exists
 // 4. Watches the AgentRun to completion
-// 5. Advances to the next stage or marks the playbook run as complete
-func (r *AgentPlaybookRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+// 5. Advances to the next stage or marks the workload run as complete
+func (r *AgentWorkloadRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	var pbRun konveyoriov1alpha1.AgentPlaybookRun
+	var pbRun konveyoriov1alpha1.AgentWorkloadRun
 	if err := r.Get(ctx, req.NamespacedName, &pbRun); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	logger.V(1).Info("Reconciling AgentPlaybookRun", "name", pbRun.Name)
+	logger.V(1).Info("Reconciling AgentWorkloadRun", "name", pbRun.Name)
 
 	original := pbRun.DeepCopy()
 	pbRun.Status.ObservedGeneration = pbRun.Generation
@@ -80,10 +80,10 @@ func (r *AgentPlaybookRunReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, nil
 	}
 
-	// Look up the referenced AgentPlaybook.
-	var playbook konveyoriov1alpha1.AgentPlaybook
-	playbookKey := types.NamespacedName{Namespace: pbRun.Namespace, Name: pbRun.Spec.PlaybookRef}
-	if err := r.Get(ctx, playbookKey, &playbook); err != nil {
+	// Look up the referenced AgentWorkload.
+	var workload konveyoriov1alpha1.AgentWorkload
+	workloadKey := types.NamespacedName{Namespace: pbRun.Namespace, Name: pbRun.Spec.WorkloadRef}
+	if err := r.Get(ctx, workloadKey, &workload); err != nil {
 		if errors.IsNotFound(err) {
 			pbRun.Status.Phase = konveyoriov1alpha1.AgentRunPhaseFailed
 			now := metav1.Now()
@@ -92,23 +92,23 @@ func (r *AgentPlaybookRunReconciler) Reconcile(ctx context.Context, req ctrl.Req
 				Type:               ConditionTypeReady,
 				Status:             metav1.ConditionFalse,
 				ObservedGeneration: pbRun.Generation,
-				Reason:             "PlaybookNotFound",
-				Message:            fmt.Sprintf("AgentPlaybook %q not found", pbRun.Spec.PlaybookRef),
+				Reason:             "WorkloadNotFound",
+				Message:            fmt.Sprintf("AgentWorkload %q not found", pbRun.Spec.WorkloadRef),
 			})
 			return r.patchRunStatus(ctx, &pbRun, original)
 		}
 		return ctrl.Result{}, err
 	}
 
-	// Check that the playbook is Ready.
-	playbookReady := meta.FindStatusCondition(playbook.Status.Conditions, ConditionTypeReady)
-	if playbookReady == nil || playbookReady.Status != metav1.ConditionTrue {
+	// Check that the workload is Ready.
+	workloadReady := meta.FindStatusCondition(workload.Status.Conditions, ConditionTypeReady)
+	if workloadReady == nil || workloadReady.Status != metav1.ConditionTrue {
 		meta.SetStatusCondition(&pbRun.Status.Conditions, metav1.Condition{
 			Type:               ConditionTypeReady,
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: pbRun.Generation,
-			Reason:             "PlaybookNotReady",
-			Message:            fmt.Sprintf("AgentPlaybook %q is not Ready", pbRun.Spec.PlaybookRef),
+			Reason:             "WorkloadNotReady",
+			Message:            fmt.Sprintf("AgentWorkload %q is not Ready", pbRun.Spec.WorkloadRef),
 		})
 		return r.patchRunStatus(ctx, &pbRun, original)
 	}
@@ -122,9 +122,9 @@ func (r *AgentPlaybookRunReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	// Initialize stage statuses if empty.
 	if len(pbRun.Status.Stages) == 0 {
-		pbRun.Status.Stages = make([]konveyoriov1alpha1.AgentPlaybookRunStageStatus, len(playbook.Spec.Stages))
-		for i, stage := range playbook.Spec.Stages {
-			pbRun.Status.Stages[i] = konveyoriov1alpha1.AgentPlaybookRunStageStatus{
+		pbRun.Status.Stages = make([]konveyoriov1alpha1.AgentWorkloadRunStageStatus, len(workload.Spec.Stages))
+		for i, stage := range workload.Spec.Stages {
+			pbRun.Status.Stages[i] = konveyoriov1alpha1.AgentWorkloadRunStageStatus{
 				Name:  stage.Name,
 				Phase: konveyoriov1alpha1.AgentRunPhasePending,
 			}
@@ -132,7 +132,7 @@ func (r *AgentPlaybookRunReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 
 	// Find the current stage to process. Use the snapshotted status
-	// stages as the source of truth — the playbook could have been
+	// stages as the source of truth — the workload could have been
 	// modified since the run started, but the run executes the stages
 	// that were captured at initialization time.
 	stageIndex := r.findCurrentStageIndex(&pbRun)
@@ -152,18 +152,18 @@ func (r *AgentPlaybookRunReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return r.patchRunStatus(ctx, &pbRun, original)
 	}
 
-	// Look up the stage definition from the playbook by name
+	// Look up the stage definition from the workload by name
 	// (matching the snapshotted status entry).
 	stageStatus := &pbRun.Status.Stages[stageIndex]
-	var stage *konveyoriov1alpha1.AgentPlaybookStage
-	for i := range playbook.Spec.Stages {
-		if playbook.Spec.Stages[i].Name == stageStatus.Name {
-			stage = &playbook.Spec.Stages[i]
+	var stage *konveyoriov1alpha1.AgentWorkloadStage
+	for i := range workload.Spec.Stages {
+		if workload.Spec.Stages[i].Name == stageStatus.Name {
+			stage = &workload.Spec.Stages[i]
 			break
 		}
 	}
 	if stage == nil {
-		// The playbook was modified and no longer has this stage.
+		// The workload was modified and no longer has this stage.
 		pbRun.Status.Phase = konveyoriov1alpha1.AgentRunPhaseFailed
 		now := metav1.Now()
 		pbRun.Status.CompletionTime = &now
@@ -172,7 +172,7 @@ func (r *AgentPlaybookRunReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: pbRun.Generation,
 			Reason:             "StageNotFound",
-			Message:            fmt.Sprintf("Stage %q no longer exists in AgentPlaybook %q", stageStatus.Name, pbRun.Spec.PlaybookRef),
+			Message:            fmt.Sprintf("Stage %q no longer exists in AgentWorkload %q", stageStatus.Name, pbRun.Spec.WorkloadRef),
 		})
 		return r.patchRunStatus(ctx, &pbRun, original)
 	}
@@ -182,7 +182,7 @@ func (r *AgentPlaybookRunReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	// If no AgentRun exists for this stage, create one.
 	if stageStatus.AgentRunName == "" {
-		agentRunName, err := r.createAgentRunForStage(ctx, &pbRun, &playbook, stage)
+		agentRunName, err := r.createAgentRunForStage(ctx, &pbRun, &workload, stage)
 		if err != nil {
 			logger.Error(err, "Failed to create AgentRun for stage",
 				"stage", stage.Name)
@@ -248,7 +248,7 @@ func (r *AgentPlaybookRunReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return r.patchRunStatus(ctx, &pbRun, original)
 
 	case konveyoriov1alpha1.AgentRunPhaseFailed:
-		// Stage failed — fail the entire playbook run.
+		// Stage failed — fail the entire workload run.
 		pbRun.Status.Phase = konveyoriov1alpha1.AgentRunPhaseFailed
 		now := metav1.Now()
 		pbRun.Status.CompletionTime = &now
@@ -276,8 +276,8 @@ func (r *AgentPlaybookRunReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 // findCurrentStageIndex returns the index of the first stage that has not
 // yet succeeded. Returns len(stages) if all stages have succeeded.
-func (r *AgentPlaybookRunReconciler) findCurrentStageIndex(
-	pbRun *konveyoriov1alpha1.AgentPlaybookRun,
+func (r *AgentWorkloadRunReconciler) findCurrentStageIndex(
+	pbRun *konveyoriov1alpha1.AgentWorkloadRun,
 ) int {
 	for i, stage := range pbRun.Status.Stages {
 		if stage.Phase != konveyoriov1alpha1.AgentRunPhaseSucceeded {
@@ -294,30 +294,30 @@ func stageAgentRunName(pbRunName, stageName string) string {
 	return sanitizeVolumeName(pbRunName + "-" + stageName)
 }
 
-// createAgentRunForStage creates an AgentRun for the given playbook stage.
-// It forwards params, models, env, and envFrom from the playbook run spec.
-// Playbook-level instructions (Guide) are passed as a separate env var
+// createAgentRunForStage creates an AgentRun for the given workload stage.
+// It forwards params, models, env, and envFrom from the workload run spec.
+// Workload-level instructions (Guide) are passed as a separate env var
 // so the harness can present them alongside stage instructions without
 // the controller making prompt composition decisions.
 //
-// Uses a deterministic name (<playbookrun>-<stage>) so that duplicate
+// Uses a deterministic name (<workloadrun>-<stage>) so that duplicate
 // creation on status-patch conflict is caught by AlreadyExists.
-func (r *AgentPlaybookRunReconciler) createAgentRunForStage(
+func (r *AgentWorkloadRunReconciler) createAgentRunForStage(
 	ctx context.Context,
-	pbRun *konveyoriov1alpha1.AgentPlaybookRun,
-	playbook *konveyoriov1alpha1.AgentPlaybook,
-	stage *konveyoriov1alpha1.AgentPlaybookStage,
+	pbRun *konveyoriov1alpha1.AgentWorkloadRun,
+	workload *konveyoriov1alpha1.AgentWorkload,
+	stage *konveyoriov1alpha1.AgentWorkloadStage,
 ) (string, error) {
 	agentRunName := stageAgentRunName(pbRun.Name, stage.Name)
 
-	// Pass playbook-level instructions (Guide) as an env var.
+	// Pass workload-level instructions (Guide) as an env var.
 	// The harness decides how to compose this with the Agent prompt
 	// and stage instructions.
 	var env []corev1.EnvVar
-	if playbook.Spec.Guide != "" {
+	if workload.Spec.Guide != "" {
 		env = append(env, corev1.EnvVar{
-			Name:  "KONVEYOR_PLAYBOOK_INSTRUCTIONS",
-			Value: playbook.Spec.Guide,
+			Name:  "KONVEYOR_WORKLOAD_INSTRUCTIONS",
+			Value: workload.Spec.Guide,
 		})
 	}
 	env = append(env, pbRun.Spec.Env...)
@@ -328,7 +328,7 @@ func (r *AgentPlaybookRunReconciler) createAgentRunForStage(
 			Namespace: pbRun.Namespace,
 			Labels: map[string]string{
 				labelManagedBy:        managedByLabel,
-				labelAgentPlaybookRun: pbRun.Name,
+				labelAgentWorkloadRun: pbRun.Name,
 				labelStage:            stage.Name,
 			},
 		},
@@ -349,7 +349,7 @@ func (r *AgentPlaybookRunReconciler) createAgentRunForStage(
 	if err := r.Create(ctx, agentRun); err != nil {
 		if errors.IsAlreadyExists(err) {
 			// AgentRun was likely created on a prior reconcile but the
-			// status patch failed. Verify it belongs to this playbook
+			// status patch failed. Verify it belongs to this workload
 			// run before accepting it.
 			var existing konveyoriov1alpha1.AgentRun
 			if getErr := r.Get(ctx, types.NamespacedName{
@@ -358,7 +358,7 @@ func (r *AgentPlaybookRunReconciler) createAgentRunForStage(
 				return "", fmt.Errorf("fetching existing AgentRun %q: %w", agentRunName, getErr)
 			}
 			if !isOwnedBy(&existing, pbRun) {
-				return "", fmt.Errorf("AgentRun %q already exists but is not owned by this playbook run", agentRunName)
+				return "", fmt.Errorf("AgentRun %q already exists but is not owned by this workload run", agentRunName)
 			}
 			return agentRunName, nil
 		}
@@ -379,65 +379,65 @@ func isOwnedBy(child client.Object, parent client.Object) bool {
 	return false
 }
 
-// patchRunStatus patches the AgentPlaybookRun status.
-func (r *AgentPlaybookRunReconciler) patchRunStatus(
+// patchRunStatus patches the AgentWorkloadRun status.
+func (r *AgentWorkloadRunReconciler) patchRunStatus(
 	ctx context.Context,
-	pbRun *konveyoriov1alpha1.AgentPlaybookRun,
-	original *konveyoriov1alpha1.AgentPlaybookRun,
+	pbRun *konveyoriov1alpha1.AgentWorkloadRun,
+	original *konveyoriov1alpha1.AgentWorkloadRun,
 ) (ctrl.Result, error) {
 	if err := r.Status().Patch(ctx, pbRun, client.MergeFrom(original)); err != nil {
-		log.FromContext(ctx).Error(err, "Failed to patch AgentPlaybookRun status",
-			"agentPlaybookRun", pbRun.Name)
+		log.FromContext(ctx).Error(err, "Failed to patch AgentWorkloadRun status",
+			"agentWorkloadRun", pbRun.Name)
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *AgentPlaybookRunReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	// Index AgentPlaybookRuns by playbookRef for efficient reverse lookup
-	// when an AgentPlaybook changes.
+func (r *AgentWorkloadRunReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Index AgentWorkloadRuns by workloadRef for efficient reverse lookup
+	// when an AgentWorkload changes.
 	if err := mgr.GetFieldIndexer().IndexField(
 		context.Background(),
-		&konveyoriov1alpha1.AgentPlaybookRun{},
-		playbookRunRefIndexField,
+		&konveyoriov1alpha1.AgentWorkloadRun{},
+		workloadRunRefIndexField,
 		func(obj client.Object) []string {
-			pbRun := obj.(*konveyoriov1alpha1.AgentPlaybookRun)
-			return []string{pbRun.Spec.PlaybookRef}
+			pbRun := obj.(*konveyoriov1alpha1.AgentWorkloadRun)
+			return []string{pbRun.Spec.WorkloadRef}
 		},
 	); err != nil {
-		return fmt.Errorf("indexing %s: %w", playbookRunRefIndexField, err)
+		return fmt.Errorf("indexing %s: %w", workloadRunRefIndexField, err)
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&konveyoriov1alpha1.AgentPlaybookRun{}).
+		For(&konveyoriov1alpha1.AgentWorkloadRun{}).
 		Owns(&konveyoriov1alpha1.AgentRun{}).
 		Watches(
-			&konveyoriov1alpha1.AgentPlaybook{},
-			handler.EnqueueRequestsFromMapFunc(r.findRunsForPlaybook),
+			&konveyoriov1alpha1.AgentWorkload{},
+			handler.EnqueueRequestsFromMapFunc(r.findRunsForWorkload),
 		).
-		Named("agentplaybookrun").
+		Named("agentworkloadrun").
 		Complete(r)
 }
 
-// findRunsForPlaybook returns reconcile requests for all non-terminal
-// AgentPlaybookRuns that reference the given AgentPlaybook.
-func (r *AgentPlaybookRunReconciler) findRunsForPlaybook(
+// findRunsForWorkload returns reconcile requests for all non-terminal
+// AgentWorkloadRuns that reference the given AgentWorkload.
+func (r *AgentWorkloadRunReconciler) findRunsForWorkload(
 	ctx context.Context,
 	obj client.Object,
 ) []reconcile.Request {
-	playbook, ok := obj.(*konveyoriov1alpha1.AgentPlaybook)
+	workload, ok := obj.(*konveyoriov1alpha1.AgentWorkload)
 	if !ok {
 		return nil
 	}
 
-	var runList konveyoriov1alpha1.AgentPlaybookRunList
+	var runList konveyoriov1alpha1.AgentWorkloadRunList
 	if err := r.List(ctx, &runList,
-		client.InNamespace(playbook.Namespace),
-		client.MatchingFields{playbookRunRefIndexField: playbook.Name},
+		client.InNamespace(workload.Namespace),
+		client.MatchingFields{workloadRunRefIndexField: workload.Name},
 	); err != nil {
-		log.FromContext(ctx).Error(err, "Failed to list AgentPlaybookRuns for AgentPlaybook",
-			"playbook", playbook.Name)
+		log.FromContext(ctx).Error(err, "Failed to list AgentWorkloadRuns for AgentWorkload",
+			"workload", workload.Name)
 		return nil
 	}
 

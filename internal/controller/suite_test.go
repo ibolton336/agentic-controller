@@ -148,13 +148,13 @@ var _ = BeforeSuite(func() {
 	}).SetupWithManager(mgr)
 	Expect(err).NotTo(HaveOccurred())
 
-	err = (&AgentPlaybookReconciler{
+	err = (&AgentWorkloadReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr)
 	Expect(err).NotTo(HaveOccurred())
 
-	err = (&AgentPlaybookRunReconciler{
+	err = (&AgentWorkloadRunReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr)

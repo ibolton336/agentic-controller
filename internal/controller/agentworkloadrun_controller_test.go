@@ -44,11 +44,11 @@ func updateAgentRunStatus(name string, mutate func(*konveyoriov1alpha1.AgentRun)
 	}, 10*time.Second, 250*time.Millisecond).Should(Succeed())
 }
 
-// waitForPlaybookReady waits until the named AgentPlaybook has Ready=True.
-func waitForPlaybookReady(playbookName string) {
-	key := types.NamespacedName{Name: playbookName, Namespace: testNamespace}
+// waitForWorkloadReady waits until the named AgentWorkload has Ready=True.
+func waitForWorkloadReady(workloadName string) {
+	key := types.NamespacedName{Name: workloadName, Namespace: testNamespace}
 	EventuallyWithOffset(1, func(g Gomega) {
-		var fetched konveyoriov1alpha1.AgentPlaybook
+		var fetched konveyoriov1alpha1.AgentWorkload
 		g.Expect(k8sClient.Get(ctx, key, &fetched)).To(Succeed())
 		readyCond := meta.FindStatusCondition(fetched.Status.Conditions, ConditionTypeReady)
 		g.Expect(readyCond).NotTo(BeNil())
@@ -56,41 +56,41 @@ func waitForPlaybookReady(playbookName string) {
 	}, 10*time.Second, 250*time.Millisecond).Should(Succeed())
 }
 
-var _ = Describe("AgentPlaybookRun Controller", func() {
+var _ = Describe("AgentWorkloadRun Controller", func() {
 	const (
 		timeout  = 10 * time.Second
 		interval = 250 * time.Millisecond
 	)
 
-	Context("when the referenced AgentPlaybook does not exist", func() {
-		const name = "apr-ctrl-no-playbook"
+	Context("when the referenced AgentWorkload does not exist", func() {
+		const name = "apr-ctrl-no-workload"
 
-		It("should set Phase=Failed with PlaybookNotFound", func() {
-			pbRun := &konveyoriov1alpha1.AgentPlaybookRun{
+		It("should set Phase=Failed with WorkloadNotFound", func() {
+			pbRun := &konveyoriov1alpha1.AgentWorkloadRun{
 				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
-				Spec: konveyoriov1alpha1.AgentPlaybookRunSpec{
-					PlaybookRef: "nonexistent-playbook",
+				Spec: konveyoriov1alpha1.AgentWorkloadRunSpec{
+					WorkloadRef: "nonexistent-workload",
 				},
 			}
 			Expect(k8sClient.Create(ctx, pbRun)).To(Succeed())
 
 			key := types.NamespacedName{Name: name, Namespace: testNamespace}
 			Eventually(func(g Gomega) {
-				var fetched konveyoriov1alpha1.AgentPlaybookRun
+				var fetched konveyoriov1alpha1.AgentWorkloadRun
 				g.Expect(k8sClient.Get(ctx, key, &fetched)).To(Succeed())
 				g.Expect(fetched.Status.Phase).To(Equal(konveyoriov1alpha1.AgentRunPhaseFailed))
 				readyCond := meta.FindStatusCondition(fetched.Status.Conditions, ConditionTypeReady)
 				g.Expect(readyCond).NotTo(BeNil())
-				g.Expect(readyCond.Reason).To(Equal("PlaybookNotFound"))
+				g.Expect(readyCond.Reason).To(Equal("WorkloadNotFound"))
 			}, timeout, interval).Should(Succeed())
 
 			Expect(k8sClient.Delete(ctx, pbRun)).To(Succeed())
 		})
 	})
 
-	Context("when the playbook is valid and stages execute sequentially", func() {
+	Context("when the workload is valid and stages execute sequentially", func() {
 		const (
-			playbookName = "apr-ctrl-seq-playbook"
+			workloadName = "apr-ctrl-seq-workload"
 			pbRunName    = "apr-ctrl-seq-run"
 			agentName    = "apr-ctrl-seq-agent"
 			provName     = "apr-prov-seq"
@@ -115,25 +115,25 @@ var _ = Describe("AgentPlaybookRun Controller", func() {
 			Expect(k8sClient.Create(ctx, agent)).To(Succeed())
 			waitForAgentReady(agentName)
 
-			By("creating a Ready AgentPlaybook with two stages")
-			playbook := &konveyoriov1alpha1.AgentPlaybook{
-				ObjectMeta: metav1.ObjectMeta{Name: playbookName, Namespace: testNamespace},
-				Spec: konveyoriov1alpha1.AgentPlaybookSpec{
-					Guide: "Sequential test playbook",
-					Stages: []konveyoriov1alpha1.AgentPlaybookStage{
+			By("creating a Ready AgentWorkload with two stages")
+			workload := &konveyoriov1alpha1.AgentWorkload{
+				ObjectMeta: metav1.ObjectMeta{Name: workloadName, Namespace: testNamespace},
+				Spec: konveyoriov1alpha1.AgentWorkloadSpec{
+					Guide: "Sequential test workload",
+					Stages: []konveyoriov1alpha1.AgentWorkloadStage{
 						{Name: "stage-a", AgentRef: agentName, Instructions: "Do stage A"},
 						{Name: "stage-b", AgentRef: agentName, Instructions: "Do stage B"},
 					},
 				},
 			}
-			Expect(k8sClient.Create(ctx, playbook)).To(Succeed())
-			waitForPlaybookReady(playbookName)
+			Expect(k8sClient.Create(ctx, workload)).To(Succeed())
+			waitForWorkloadReady(workloadName)
 
-			By("creating the AgentPlaybookRun")
-			pbRun := &konveyoriov1alpha1.AgentPlaybookRun{
+			By("creating the AgentWorkloadRun")
+			pbRun := &konveyoriov1alpha1.AgentWorkloadRun{
 				ObjectMeta: metav1.ObjectMeta{Name: pbRunName, Namespace: testNamespace},
-				Spec: konveyoriov1alpha1.AgentPlaybookRunSpec{
-					PlaybookRef: playbookName,
+				Spec: konveyoriov1alpha1.AgentWorkloadRunSpec{
+					WorkloadRef: workloadName,
 					Models: []konveyoriov1alpha1.AgentRunModelSelection{
 						{Role: testRolePrimary, Provider: provName, Model: testLLMModelName},
 					},
@@ -148,7 +148,7 @@ var _ = Describe("AgentPlaybookRun Controller", func() {
 			pbRunKey := types.NamespacedName{Name: pbRunName, Namespace: testNamespace}
 			expectedStageAName := stageAgentRunName(pbRunName, "stage-a")
 			Eventually(func(g Gomega) {
-				var fetched konveyoriov1alpha1.AgentPlaybookRun
+				var fetched konveyoriov1alpha1.AgentWorkloadRun
 				g.Expect(k8sClient.Get(ctx, pbRunKey, &fetched)).To(Succeed())
 				g.Expect(fetched.Status.Phase).To(Equal(konveyoriov1alpha1.AgentRunPhaseRunning))
 				g.Expect(fetched.Status.CurrentStage).To(Equal("stage-a"))
@@ -171,11 +171,11 @@ var _ = Describe("AgentPlaybookRun Controller", func() {
 			Expect(stageARun.Spec.Models[0].Role).To(Equal(testRolePrimary))
 
 			By("verifying stage-a AgentRun has correct labels")
-			Expect(stageARun.Labels).To(HaveKeyWithValue(labelAgentPlaybookRun, pbRunName))
+			Expect(stageARun.Labels).To(HaveKeyWithValue(labelAgentWorkloadRun, pbRunName))
 			Expect(stageARun.Labels).To(HaveKeyWithValue(labelStage, "stage-a"))
 
 			By("verifying stage-b is not started yet")
-			var fetchedPBRun konveyoriov1alpha1.AgentPlaybookRun
+			var fetchedPBRun konveyoriov1alpha1.AgentWorkloadRun
 			Expect(k8sClient.Get(ctx, pbRunKey, &fetchedPBRun)).To(Succeed())
 			Expect(fetchedPBRun.Status.Stages[1].AgentRunName).To(BeEmpty())
 			Expect(fetchedPBRun.Status.Stages[1].Phase).To(Equal(konveyoriov1alpha1.AgentRunPhasePending))
@@ -193,7 +193,7 @@ var _ = Describe("AgentPlaybookRun Controller", func() {
 			By("verifying stage-b AgentRun is created")
 			var stageBRunName string
 			Eventually(func(g Gomega) {
-				var fetched konveyoriov1alpha1.AgentPlaybookRun
+				var fetched konveyoriov1alpha1.AgentWorkloadRun
 				g.Expect(k8sClient.Get(ctx, pbRunKey, &fetched)).To(Succeed())
 				g.Expect(fetched.Status.CurrentStage).To(Equal("stage-b"))
 				g.Expect(fetched.Status.Stages[0].Phase).To(Equal(konveyoriov1alpha1.AgentRunPhaseSucceeded))
@@ -219,9 +219,9 @@ var _ = Describe("AgentPlaybookRun Controller", func() {
 				})
 			})
 
-			By("verifying the playbook run completes successfully")
+			By("verifying the workload run completes successfully")
 			Eventually(func(g Gomega) {
-				var fetched konveyoriov1alpha1.AgentPlaybookRun
+				var fetched konveyoriov1alpha1.AgentWorkloadRun
 				g.Expect(k8sClient.Get(ctx, pbRunKey, &fetched)).To(Succeed())
 				g.Expect(fetched.Status.Phase).To(Equal(konveyoriov1alpha1.AgentRunPhaseSucceeded))
 				g.Expect(fetched.Status.CompletionTime).NotTo(BeNil())
@@ -236,27 +236,27 @@ var _ = Describe("AgentPlaybookRun Controller", func() {
 			var runList konveyoriov1alpha1.AgentRunList
 			Expect(k8sClient.List(ctx, &runList,
 				client.InNamespace(testNamespace),
-				client.MatchingLabels{labelAgentPlaybookRun: pbRunName},
+				client.MatchingLabels{labelAgentWorkloadRun: pbRunName},
 			)).To(Succeed())
 			for i := range runList.Items {
 				Expect(k8sClient.Delete(ctx, &runList.Items[i])).To(Succeed())
 			}
 			Expect(k8sClient.Delete(ctx, pbRun)).To(Succeed())
-			Expect(k8sClient.Delete(ctx, playbook)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, workload)).To(Succeed())
 			Expect(k8sClient.Delete(ctx, agent)).To(Succeed())
 		})
 	})
 
 	Context("when a stage fails", func() {
 		const (
-			playbookName = "apr-ctrl-fail-playbook"
+			workloadName = "apr-ctrl-fail-workload"
 			pbRunName    = "apr-ctrl-fail-run"
 			agentName    = "apr-ctrl-fail-agent"
 			provName     = "apr-prov-fail"
 			secretName   = "apr-secret-fail"
 		)
 
-		It("should fail the entire playbook run", func() {
+		It("should fail the entire workload run", func() {
 			cleanup := makeReadyProvider(provName, secretName)
 			defer cleanup()
 
@@ -270,22 +270,22 @@ var _ = Describe("AgentPlaybookRun Controller", func() {
 			Expect(k8sClient.Create(ctx, agent)).To(Succeed())
 			waitForAgentReady(agentName)
 
-			playbook := &konveyoriov1alpha1.AgentPlaybook{
-				ObjectMeta: metav1.ObjectMeta{Name: playbookName, Namespace: testNamespace},
-				Spec: konveyoriov1alpha1.AgentPlaybookSpec{
-					Stages: []konveyoriov1alpha1.AgentPlaybookStage{
+			workload := &konveyoriov1alpha1.AgentWorkload{
+				ObjectMeta: metav1.ObjectMeta{Name: workloadName, Namespace: testNamespace},
+				Spec: konveyoriov1alpha1.AgentWorkloadSpec{
+					Stages: []konveyoriov1alpha1.AgentWorkloadStage{
 						{Name: "will-fail", AgentRef: agentName, Instructions: "This will fail"},
 						{Name: "never-runs", AgentRef: agentName, Instructions: "Should not run"},
 					},
 				},
 			}
-			Expect(k8sClient.Create(ctx, playbook)).To(Succeed())
-			waitForPlaybookReady(playbookName)
+			Expect(k8sClient.Create(ctx, workload)).To(Succeed())
+			waitForWorkloadReady(workloadName)
 
-			pbRun := &konveyoriov1alpha1.AgentPlaybookRun{
+			pbRun := &konveyoriov1alpha1.AgentWorkloadRun{
 				ObjectMeta: metav1.ObjectMeta{Name: pbRunName, Namespace: testNamespace},
-				Spec: konveyoriov1alpha1.AgentPlaybookRunSpec{
-					PlaybookRef: playbookName,
+				Spec: konveyoriov1alpha1.AgentWorkloadRunSpec{
+					WorkloadRef: workloadName,
 					Models: []konveyoriov1alpha1.AgentRunModelSelection{
 						{Role: testRolePrimary, Provider: provName, Model: testLLMModelName},
 					},
@@ -297,7 +297,7 @@ var _ = Describe("AgentPlaybookRun Controller", func() {
 			pbRunKey := types.NamespacedName{Name: pbRunName, Namespace: testNamespace}
 			var stageRunName string
 			Eventually(func(g Gomega) {
-				var fetched konveyoriov1alpha1.AgentPlaybookRun
+				var fetched konveyoriov1alpha1.AgentWorkloadRun
 				g.Expect(k8sClient.Get(ctx, pbRunKey, &fetched)).To(Succeed())
 				g.Expect(fetched.Status.Stages).To(HaveLen(2))
 				g.Expect(fetched.Status.Stages[0].AgentRunName).NotTo(BeEmpty())
@@ -314,9 +314,9 @@ var _ = Describe("AgentPlaybookRun Controller", func() {
 				})
 			})
 
-			By("verifying the playbook run fails")
+			By("verifying the workload run fails")
 			Eventually(func(g Gomega) {
-				var fetched konveyoriov1alpha1.AgentPlaybookRun
+				var fetched konveyoriov1alpha1.AgentWorkloadRun
 				g.Expect(k8sClient.Get(ctx, pbRunKey, &fetched)).To(Succeed())
 				g.Expect(fetched.Status.Phase).To(Equal(konveyoriov1alpha1.AgentRunPhaseFailed))
 				g.Expect(fetched.Status.CompletionTime).NotTo(BeNil())
@@ -326,23 +326,23 @@ var _ = Describe("AgentPlaybookRun Controller", func() {
 			}, timeout, interval).Should(Succeed())
 
 			By("verifying stage-2 was never started")
-			var finalPBRun konveyoriov1alpha1.AgentPlaybookRun
+			var finalPBRun konveyoriov1alpha1.AgentWorkloadRun
 			Expect(k8sClient.Get(ctx, pbRunKey, &finalPBRun)).To(Succeed())
 			Expect(finalPBRun.Status.Stages[1].AgentRunName).To(BeEmpty())
 			Expect(finalPBRun.Status.Stages[1].Phase).To(Equal(konveyoriov1alpha1.AgentRunPhasePending))
 
-			// Clean up — delete the AgentRuns owned by the playbook run
+			// Clean up — delete the AgentRuns owned by the workload run
 			// first to avoid GC issues in tests.
 			var runList konveyoriov1alpha1.AgentRunList
 			Expect(k8sClient.List(ctx, &runList,
 				client.InNamespace(testNamespace),
-				client.MatchingLabels{labelAgentPlaybookRun: pbRunName},
+				client.MatchingLabels{labelAgentWorkloadRun: pbRunName},
 			)).To(Succeed())
 			for i := range runList.Items {
 				Expect(k8sClient.Delete(ctx, &runList.Items[i])).To(Succeed())
 			}
 			Expect(k8sClient.Delete(ctx, pbRun)).To(Succeed())
-			Expect(k8sClient.Delete(ctx, playbook)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, workload)).To(Succeed())
 			Expect(k8sClient.Delete(ctx, agent)).To(Succeed())
 		})
 	})

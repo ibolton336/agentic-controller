@@ -7,6 +7,6 @@ resources:
 - bases/konveyor.io_llmproviders.yaml
 - bases/konveyor.io_agents.yaml
 - bases/konveyor.io_agentruns.yaml
-- bases/konveyor.io_agentplaybooks.yaml
-- bases/konveyor.io_agentplaybookruns.yaml
+- bases/konveyor.io_agentworkloads.yaml
+- bases/konveyor.io_agentworkloadruns.yaml
 #+kubebuilder:scaffold:crdkustomizeresource

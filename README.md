@@ -25,8 +25,8 @@ CI pipeline) resolves application metadata before creating the CR.
 | **LLMProvider** | LLM service endpoint, credentials, and available models. |
 | **Agent** | Template declaring available skills, providers, container image, prompt, and typed parameters. |
 | **AgentRun** | Execute a single Agent with specific values. Creates an Agent Sandbox. |
-| **AgentPlaybook** | Ordered sequence of stages, each referencing an Agent. |
-| **AgentPlaybookRun** | Execute a playbook. Creates AgentRuns sequentially per stage. |
+| **AgentWorkload** | Ordered sequence of stages, each referencing an Agent. |
+| **AgentWorkloadRun** | Execute a workload. Creates AgentRuns sequentially per stage. |
 
 ### Key design decisions
 
