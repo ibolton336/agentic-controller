@@ -18,6 +18,7 @@ func clearKonveyorEnv(t *testing.T) {
 		"HUB_TOKEN",
 		"APP_ID",
 		"KONVEYOR_ACP_SECRET_KEY",
+		"TARGET_BRANCH",
 	} {
 		t.Setenv(k, "")
 		os.Unsetenv(k)
@@ -31,6 +32,7 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("HUB_BASE_URL", "https://hub.example.com")
 	t.Setenv("APP_ID", "42")
 	t.Setenv("KONVEYOR_ACP_SECRET_KEY", "test-secret-key")
+	t.Setenv("TARGET_BRANCH", "migration-1234")
 }
 
 func TestLoadFromEnv(t *testing.T) {
@@ -84,6 +86,34 @@ func TestLoadFromEnv(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "KONVEYOR_ACP_SECRET_KEY") {
 			t.Errorf("error should name missing var, got: %v", err)
+		}
+	})
+
+	t.Run("errors when TARGET_BRANCH is empty", func(t *testing.T) {
+		clearKonveyorEnv(t)
+		setRequiredEnv(t)
+		os.Unsetenv("TARGET_BRANCH")
+
+		_, err := LoadFromEnv()
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "TARGET_BRANCH") {
+			t.Errorf("error should name TARGET_BRANCH, got: %v", err)
+		}
+	})
+
+	t.Run("populates TargetBranch", func(t *testing.T) {
+		clearKonveyorEnv(t)
+		setRequiredEnv(t)
+		t.Setenv("TARGET_BRANCH", "konveyor/migrate-42")
+
+		cfg, err := LoadFromEnv()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.TargetBranch != "konveyor/migrate-42" {
+			t.Errorf("TargetBranch = %q, want %q", cfg.TargetBranch, "konveyor/migrate-42")
 		}
 	})
 

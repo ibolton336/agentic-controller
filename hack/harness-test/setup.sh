@@ -40,7 +40,7 @@ echo "  hub token generated (expires in 24h)"
 
 echo ""
 echo "=== Building agent images ==="
-make -C "$REPO_ROOT" agent-images-build CONTAINER_TOOL="$CONTAINER_TOOL"
+make -C "$REPO_ROOT" agent-java-build CONTAINER_TOOL="$CONTAINER_TOOL"
 
 echo ""
 echo "=== Building skill images ==="

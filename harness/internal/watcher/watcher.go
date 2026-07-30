@@ -25,6 +25,7 @@ type Watcher struct {
 	quietPeriod time.Duration
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
+	stopOnce    sync.Once
 }
 
 func New(dir string, pushFn PushFn) (*Watcher, error) {
@@ -59,11 +60,13 @@ func (w *Watcher) Start(ctx context.Context) error {
 }
 
 func (w *Watcher) Stop() {
-	if w.cancel != nil {
-		w.cancel()
-	}
-	w.wg.Wait()
-	w.fsw.Close()
+	w.stopOnce.Do(func() {
+		if w.cancel != nil {
+			w.cancel()
+		}
+		w.wg.Wait()
+		w.fsw.Close()
+	})
 }
 
 func (w *Watcher) loop(ctx context.Context) {

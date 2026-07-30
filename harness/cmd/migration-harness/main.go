@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -43,7 +44,7 @@ func main() {
 }
 
 func runStage(cmd *cobra.Command, args []string) error {
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	// 1. Load config from env
@@ -63,12 +64,10 @@ func runStage(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("hub resolution: %w", err)
 	}
 
-	// Controller must set the target branch — Hub branch is the source, not the push target.
-	targetBranch := os.Getenv("TARGET_BRANCH")
-	if err := validateTargetBranch(targetBranch, creds.Branch); err != nil {
-		return err
+	if cfg.TargetBranch == creds.Branch {
+		return fmt.Errorf("TARGET_BRANCH %q must differ from source branch", cfg.TargetBranch)
 	}
-	creds.Branch = targetBranch
+	creds.Branch = cfg.TargetBranch
 
 	// 3. Clone, strip creds, checkout branch
 	logging.Header("Git Setup")
@@ -167,17 +166,22 @@ func runStage(cmd *cobra.Command, args []string) error {
 		logging.Err("prompt failed: %v", err)
 	}
 
+	// 10. Check goose health
 	if !srv.Alive() {
 		logging.Err("goose serve crashed")
 	}
 
-	// 10. Stop watcher
-	w.Stop()
+	// 11. Check for uncommitted work
+	if wt, err := repo.Worktree(); err == nil {
+		if st, err := wt.Status(); err == nil && !st.IsClean() {
+			logging.Warn("worktree dirty at stage end — agent left %d uncommitted paths", len(st))
+		}
+	}
 
-	// 11. Determine exit status from ACP/goose signals
+	// 12. Determine exit status from ACP/goose signals
 	stageFailed := err != nil || !srv.Alive()
 
-	// 12. Final push (use a fresh context — the signal context may
+	// 13. Final push (use a fresh context — the signal context may
 	// already be cancelled after SIGINT)
 	logging.Header("Final Push")
 	pushCtx, pushCancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -186,7 +190,7 @@ func runStage(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("final push: %w", err)
 	}
 
-	// 13. Exit
+	// 14. Exit
 	if stageFailed {
 		logging.Err("stage failed")
 		return fmt.Errorf("stage failed")
@@ -255,8 +259,6 @@ func buildPrompt(skillContent string) string {
 	return b.String()
 }
 
-
-
 func resolveFromHub(cfg *config.Config) (*git.Credentials, *hub.Client, error) {
 	logging.Header("Hub Resolution")
 
@@ -295,7 +297,10 @@ func resolveFromHub(cfg *config.Config) (*git.Credentials, *hub.Client, error) {
 }
 
 func fetchAndWriteAnalysis(hubClient *hub.Client, appIDStr string, workDir string) error {
-	appID, _ := hub.ParseAppID(appIDStr)
+	appID, err := hub.ParseAppID(appIDStr)
+	if err != nil {
+		return fmt.Errorf("invalid APP_ID %q: %w", appIDStr, err)
+	}
 	insights, err := hubClient.FetchAnalysis(appID)
 	if err != nil {
 		return err
@@ -323,15 +328,3 @@ func fetchAndWriteAnalysis(hubClient *hub.Client, appIDStr string, workDir strin
 	logging.Ok("wrote %d analysis insights to %s", len(insights), analysisPath)
 	return nil
 }
-
-func validateTargetBranch(target, source string) error {
-	if target == "" {
-		return fmt.Errorf("TARGET_BRANCH is required")
-	}
-	if target == source {
-		return fmt.Errorf("TARGET_BRANCH %q must differ from source branch", target)
-	}
-	return nil
-}
-
-

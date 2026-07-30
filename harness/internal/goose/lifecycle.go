@@ -19,8 +19,8 @@ type ServeProcess struct {
 	cmd       *exec.Cmd
 	port      int
 	secretKey string
-	done     chan struct{}
-	tempDirs []string
+	done      chan struct{}
+	tempDirs  []string
 }
 
 const (
@@ -68,8 +68,8 @@ func StartServe(ctx context.Context, port int, secretKey, provider, model, apiKe
 		cmd:       cmd,
 		port:      port,
 		secretKey: secretKey,
-		done:     make(chan struct{}),
-		tempDirs: tempDirs,
+		done:      make(chan struct{}),
+		tempDirs:  tempDirs,
 	}
 
 	go func() {
@@ -170,6 +170,10 @@ func providerEnv(provider, model, apiKey, endpoint string) (env []string, tempDi
 			env = append(env, "OPENAI_API_KEY="+apiKey)
 		case "google":
 			env = append(env, "GOOGLE_API_KEY="+apiKey)
+		case "gcp_vertex_ai":
+			// uses ADC credentials, not an API key
+		default:
+			logging.Warn("unmapped provider %q — API key not forwarded to goose", p)
 		}
 	}
 
@@ -193,6 +197,10 @@ func providerEnv(provider, model, apiKey, endpoint string) (env []string, tempDi
 			env = append(env, "ANTHROPIC_HOST="+endpoint)
 		case "openai":
 			env = append(env, "OPENAI_HOST="+endpoint)
+		case "gcp_vertex_ai":
+			// endpoint configured via ADC project/region, not env var
+		default:
+			logging.Warn("unmapped provider %q — endpoint not forwarded to goose", p)
 		}
 	}
 

@@ -69,7 +69,6 @@ All configuration is via environment variables — there is no config file or `i
 | `KONVEYOR_PARAM_MAX_TURNS` | `200` | Max tool-call turns before terminating |
 | `HARNESS_WORK_DIR` | `/workspace/repo` | Clone directory |
 | `HARNESS_SKILLS_DIR` | `/opt/skills` | Skills mount directory |
-| `HARNESS_SOURCE_EXTS` | — | Additional source file extensions for the watcher |
 | `KONVEYOR_PROMPT` | — | Agent-level standing instructions |
 | `KONVEYOR_PLAYBOOK_INSTRUCTIONS` | — | Playbook guide context |
 | `KONVEYOR_INSTRUCTIONS` | — | Stage-specific task instructions |
@@ -79,7 +78,7 @@ All configuration is via environment variables — there is no config file or `i
 ## Git Lifecycle
 
 1. **Clone** — harness clones using Hub-provided credentials
-2. **Strip credentials** — removes push auth from the git remote config
+2. **Strip credentials** — strips any embedded credentials from the remote URL (safety net — auth is passed via transport, not URL)
 3. **Clear env** — Hub token is cleared from the process environment
 4. **Checkout branch** — checks out `TARGET_BRANCH`
 5. **Agent commits** — the agent commits locally with descriptive messages (per skill instructions)

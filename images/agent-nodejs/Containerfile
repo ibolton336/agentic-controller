@@ -3,15 +3,14 @@
 # Build context must be the repository root:
 #   podman build -t agent-nodejs -f images/agent-nodejs/Containerfile .
 
-FROM quay.io/konveyor/agent-base:latest AS base
+ARG BASE_IMAGE=quay.io/konveyor/agent-base:latest
+FROM ${BASE_IMAGE} AS base
 
 USER root
 
 RUN dnf install -y nodejs npm && dnf clean all
 
-ENV HARNESS_SOURCE_EXTS=".js,.ts,.jsx,.tsx,.mjs,.cjs"
-
-USER harness
+USER 1001
 
 ENTRYPOINT ["migration-harness"]
 CMD ["run"]

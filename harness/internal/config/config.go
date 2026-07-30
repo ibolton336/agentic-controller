@@ -11,25 +11,28 @@ const (
 )
 
 type Config struct {
-	Model            string
-	Provider         string
-	Endpoint         string
-	APIKey           string
+	Model    string
+	Provider string
+	Endpoint string
+	APIKey   string
 	MaxTurns int
 
 	HubBaseURL   string
 	HubToken     string
 	AppID        string
 	ACPSecretKey string
+
+	TargetBranch string
 }
 
 func LoadFromEnv() (*Config, error) {
 	required := map[string]string{
 		"KONVEYOR_MODEL_PRIMARY_MODEL":    os.Getenv("KONVEYOR_MODEL_PRIMARY_MODEL"),
 		"KONVEYOR_MODEL_PRIMARY_PROVIDER": os.Getenv("KONVEYOR_MODEL_PRIMARY_PROVIDER"),
-		"HUB_BASE_URL":                   os.Getenv("HUB_BASE_URL"),
+		"HUB_BASE_URL":                    os.Getenv("HUB_BASE_URL"),
 		"APP_ID":                          os.Getenv("APP_ID"),
 		"KONVEYOR_ACP_SECRET_KEY":         os.Getenv("KONVEYOR_ACP_SECRET_KEY"),
+		"TARGET_BRANCH":                   os.Getenv("TARGET_BRANCH"),
 	}
 	for k, v := range required {
 		if v == "" {
@@ -38,15 +41,16 @@ func LoadFromEnv() (*Config, error) {
 	}
 
 	cfg := &Config{
-		Model:            required["KONVEYOR_MODEL_PRIMARY_MODEL"],
-		Provider:         required["KONVEYOR_MODEL_PRIMARY_PROVIDER"],
-		Endpoint:         os.Getenv("KONVEYOR_MODEL_PRIMARY_ENDPOINT"),
-		APIKey:           os.Getenv("KONVEYOR_MODEL_PRIMARY_API_KEY"),
-		MaxTurns:         DefaultMaxTurns,
-		HubBaseURL:       required["HUB_BASE_URL"],
-		HubToken:         os.Getenv("HUB_TOKEN"),
-		AppID:            required["APP_ID"],
-		ACPSecretKey:     required["KONVEYOR_ACP_SECRET_KEY"],
+		Model:        required["KONVEYOR_MODEL_PRIMARY_MODEL"],
+		Provider:     required["KONVEYOR_MODEL_PRIMARY_PROVIDER"],
+		Endpoint:     os.Getenv("KONVEYOR_MODEL_PRIMARY_ENDPOINT"),
+		APIKey:       os.Getenv("KONVEYOR_MODEL_PRIMARY_API_KEY"),
+		MaxTurns:     DefaultMaxTurns,
+		HubBaseURL:   required["HUB_BASE_URL"],
+		HubToken:     os.Getenv("HUB_TOKEN"),
+		AppID:        required["APP_ID"],
+		ACPSecretKey: required["KONVEYOR_ACP_SECRET_KEY"],
+		TargetBranch: required["TARGET_BRANCH"],
 	}
 
 	if n, err := strconv.Atoi(os.Getenv("KONVEYOR_PARAM_MAX_TURNS")); err == nil && n > 0 {

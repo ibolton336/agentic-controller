@@ -8,13 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	gogitcfg "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/konveyor/migration-harness/internal/watcher"
 )
 
 func isChildOf(path, root string) bool {
@@ -90,9 +87,14 @@ func EnsureGitignore(repoDir string, patterns []string) error {
 	existing, _ := os.ReadFile(gitignorePath)
 	content := string(existing)
 
+	lines := strings.Split(content, "\n")
+	knownLines := make(map[string]bool)
+	for _, line := range lines {
+		knownLines[strings.TrimSpace(line)] = true
+	}
 	var toAdd []string
 	for _, p := range patterns {
-		if !strings.Contains(content, p) {
+		if !knownLines[p] {
 			toAdd = append(toAdd, p)
 		}
 	}
@@ -163,48 +165,6 @@ func CheckoutBranch(repo *gogit.Repository, branch string) error {
 		}
 	}
 	return nil
-}
-
-func CommitAll(repo *gogit.Repository, message string) (plumbing.Hash, error) {
-	wt, err := repo.Worktree()
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("get worktree: %w", err)
-	}
-
-	status, err := wt.Status()
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("get status: %w", err)
-	}
-	if status.IsClean() {
-		return plumbing.ZeroHash, nil
-	}
-
-	staged := false
-	for path, s := range status {
-		if s.Worktree == gogit.Untracked && !watcher.ShouldStageNewFile(path) {
-			continue
-		}
-		if _, err := wt.Add(path); err != nil {
-			return plumbing.ZeroHash, fmt.Errorf("add %s: %w", path, err)
-		}
-		staged = true
-	}
-	if !staged {
-		return plumbing.ZeroHash, nil
-	}
-
-	hash, err := wt.Commit(message, &gogit.CommitOptions{
-		Author: &object.Signature{
-			Name:  "migration-harness",
-			Email: "migration-harness@konveyor.io",
-			When:  time.Now(),
-		},
-	})
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("commit: %w", err)
-	}
-
-	return hash, nil
 }
 
 func Push(ctx context.Context, cred *Credentials, repo *gogit.Repository, branch string) error {

@@ -33,7 +33,7 @@ type ClientInfo struct {
 
 // InitResult is the response from initialize.
 type InitResult struct {
-	ProtocolVersion  int             `json:"protocolVersion"`
+	ProtocolVersion   int             `json:"protocolVersion"`
 	AgentCapabilities json.RawMessage `json:"agentCapabilities"`
 }
 
@@ -145,9 +145,9 @@ type PromptParams struct {
 
 // PromptResult is the final response from session/prompt.
 type PromptResult struct {
-	StopReason string          `json:"stopReason"`
-	Usage      *PromptUsage    `json:"usage,omitempty"`
-	Chunks     []string        // collected agent_message_chunk text
+	StopReason string       `json:"stopReason"`
+	Usage      *PromptUsage `json:"usage,omitempty"`
+	Chunks     []string     `json:"-"`
 }
 
 type PromptUsage struct {
@@ -182,12 +182,12 @@ func (c *SessionClient) SendPrompt(ctx context.Context, sessionID string, conten
 			if msg.IsNotification() {
 				if isToolCall(msg) {
 					turnCount++
-					if maxTurns > 0 && turnCount >= maxTurns {
-						logging.Warn("max turns reached (%d), terminating", maxTurns)
-						return result, fmt.Errorf("max turns reached (%d)", maxTurns)
-					}
 				}
 				handlePromptNotification(msg, result)
+				if maxTurns > 0 && turnCount >= maxTurns {
+					logging.Warn("max turns reached (%d), terminating", maxTurns)
+					return result, fmt.Errorf("max turns reached (%d)", maxTurns)
+				}
 				continue
 			}
 			if msg.ID != nil && *msg.ID == req.ID {

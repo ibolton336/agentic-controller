@@ -12,13 +12,7 @@ import (
 	gogitcfg "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
-
-	"github.com/konveyor/migration-harness/internal/watcher"
 )
-
-func init() {
-	watcher.InitSourceExts(".java")
-}
 
 func setupBareRemote(t *testing.T) (string, *gogit.Repository) {
 	t.Helper()
@@ -66,44 +60,6 @@ func seedBareRepo(t *testing.T, remoteDir string) {
 	}
 	if err := repo.Push(&gogit.PushOptions{}); err != nil {
 		t.Fatalf("seed push: %v", err)
-	}
-}
-
-func TestCommitAllCleanIsNoop(t *testing.T) {
-	remoteDir, _ := setupBareRemote(t)
-	seedBareRepo(t, remoteDir)
-	_, repo := cloneLocal(t, remoteDir)
-
-	hash, err := CommitAll(repo, "should not commit")
-	if err != nil {
-		t.Fatalf("CommitAll: %v", err)
-	}
-	if hash != plumbing.ZeroHash {
-		t.Errorf("expected zero hash for clean tree, got %s", hash)
-	}
-}
-
-func TestCommitAllWithChanges(t *testing.T) {
-	remoteDir, _ := setupBareRemote(t)
-	seedBareRepo(t, remoteDir)
-	cloneDir, repo := cloneLocal(t, remoteDir)
-
-	os.WriteFile(filepath.Join(cloneDir, "new-file.java"), []byte("class Hello {}\n"), 0644)
-
-	hash, err := CommitAll(repo, "add new file")
-	if err != nil {
-		t.Fatalf("CommitAll: %v", err)
-	}
-	if hash == plumbing.ZeroHash {
-		t.Error("expected non-zero hash for commit with changes")
-	}
-
-	commit, err := repo.CommitObject(hash)
-	if err != nil {
-		t.Fatalf("get commit: %v", err)
-	}
-	if commit.Message != "add new file" {
-		t.Errorf("message = %q, want %q", commit.Message, "add new file")
 	}
 }
 
@@ -196,9 +152,18 @@ func TestFullLifecycle(t *testing.T) {
 	}
 
 	os.WriteFile(filepath.Join(cloneDir, "migrated.java"), []byte("class Foo {}\n"), 0644)
-	hash, err := CommitAll(repo, "migrate: Foo.java")
+	wt, err := repo.Worktree()
 	if err != nil {
-		t.Fatalf("CommitAll: %v", err)
+		t.Fatalf("worktree: %v", err)
+	}
+	if _, err := wt.Add("migrated.java"); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	hash, err := wt.Commit("migrate: Foo.java", &gogit.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test.com", When: time.Now()},
+	})
+	if err != nil {
+		t.Fatalf("commit: %v", err)
 	}
 	if hash == plumbing.ZeroHash {
 		t.Error("expected commit hash")
@@ -244,7 +209,11 @@ func TestPushWithoutCredsToStrippedRemoteFails(t *testing.T) {
 	CheckoutBranch(repo, cred.Branch)
 
 	os.WriteFile(filepath.Join(cloneDir, "file.txt"), []byte("data\n"), 0644)
-	CommitAll(repo, "test commit")
+	wt, _ := repo.Worktree()
+	wt.Add("file.txt")
+	wt.Commit("test commit", &gogit.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test.com", When: time.Now()},
+	})
 
 	// Push with nil credentials should fail
 	err = Push(ctx, &Credentials{RepoURL: remoteDir, Branch: cred.Branch}, repo, cred.Branch)

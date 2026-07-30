@@ -124,19 +124,19 @@ agent-base-build: ## Build the base agent image (goose + git + Python + graphify
 
 .PHONY: agent-java-build
 agent-java-build: agent-base-build ## Build the Java agent image (JDK 21 + Maven).
-	$(CONTAINER_TOOL) build -t $(AGENT_JAVA_IMG) -f images/agent-java/Containerfile .
+	$(CONTAINER_TOOL) build --build-arg BASE_IMAGE=$(AGENT_BASE_IMG) -t $(AGENT_JAVA_IMG) -f images/agent-java/Containerfile .
 
 .PHONY: agent-go-build
 agent-go-build: agent-base-build ## Build the Go agent image.
-	$(CONTAINER_TOOL) build -t $(AGENT_GO_IMG) -f images/agent-go/Containerfile .
+	$(CONTAINER_TOOL) build --build-arg BASE_IMAGE=$(AGENT_BASE_IMG) -t $(AGENT_GO_IMG) -f images/agent-go/Containerfile .
 
 .PHONY: agent-csharp-build
 agent-csharp-build: agent-base-build ## Build the C# agent image (.NET SDK).
-	$(CONTAINER_TOOL) build -t $(AGENT_CSHARP_IMG) -f images/agent-csharp/Containerfile .
+	$(CONTAINER_TOOL) build --build-arg BASE_IMAGE=$(AGENT_BASE_IMG) -t $(AGENT_CSHARP_IMG) -f images/agent-csharp/Containerfile .
 
 .PHONY: agent-nodejs-build
 agent-nodejs-build: agent-base-build ## Build the Node.js agent image.
-	$(CONTAINER_TOOL) build -t $(AGENT_NODEJS_IMG) -f images/agent-nodejs/Containerfile .
+	$(CONTAINER_TOOL) build --build-arg BASE_IMAGE=$(AGENT_BASE_IMG) -t $(AGENT_NODEJS_IMG) -f images/agent-nodejs/Containerfile .
 
 .PHONY: agent-images-build
 agent-images-build: agent-java-build agent-go-build agent-csharp-build agent-nodejs-build ## Build all agent images.
