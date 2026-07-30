@@ -112,6 +112,14 @@ func runStage(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// 3c. Commit harness-managed files so they survive on the branch
+	if err := git.CommitFiles(repo, []string{
+		".gitignore",
+		".konveyor/analysis.json",
+	}, "harness: add grounding data"); err != nil {
+		return fmt.Errorf("commit harness files: %w", err)
+	}
+
 	// 4. Start goose serve
 	logging.Header("Goose Setup")
 	srv, err := goose.StartServe(ctx, 0, cfg.ACPSecretKey, cfg.Provider, cfg.Model, cfg.APIKey, cfg.Endpoint)
@@ -178,19 +186,22 @@ func runStage(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// 12. Determine exit status from ACP/goose signals
+	// 12. Stop watcher before final push
+	w.Stop()
+
+	// 13. Determine exit status from ACP/goose signals
 	stageFailed := err != nil || !srv.Alive()
 
-	// 13. Final push (use a fresh context — the signal context may
+	// 14. Final push (use a fresh context — the signal context may
 	// already be cancelled after SIGINT)
 	logging.Header("Final Push")
-	pushCtx, pushCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	pushCtx, pushCancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer pushCancel()
 	if err := git.Push(pushCtx, creds, repo, creds.Branch); err != nil {
 		return fmt.Errorf("final push: %w", err)
 	}
 
-	// 14. Exit
+	// 15. Exit
 	if stageFailed {
 		logging.Err("stage failed")
 		return fmt.Errorf("stage failed")

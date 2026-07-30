@@ -59,6 +59,7 @@ RUN mkdir -p /opt/skills /workspace /home/harness/.migration-harness \
     && chmod -R g=u /home/harness /workspace \
     && chmod 1777 /tmp
 
+ENV HOME=/home/harness
 WORKDIR /workspace
 USER 1001
 

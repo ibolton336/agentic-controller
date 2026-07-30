@@ -117,6 +117,26 @@ func EnsureGitignore(repoDir string, patterns []string) error {
 	return nil
 }
 
+func CommitFiles(repo *gogit.Repository, paths []string, msg string) error {
+	wt, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("get worktree: %w", err)
+	}
+	for _, p := range paths {
+		if _, err := wt.Add(p); err != nil {
+			continue
+		}
+	}
+	_, err = wt.Commit(msg, &gogit.CommitOptions{})
+	if errors.Is(err, gogit.ErrEmptyCommit) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
 func ConfigureAuthor(repo *gogit.Repository) error {
 	cfg, err := repo.Config()
 	if err != nil {
