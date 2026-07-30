@@ -5,14 +5,17 @@
 #   podman build -t agent-base -f images/agent-base/Containerfile .
 
 # --- Build stage ---
-FROM golang:1.26 AS builder
+# Runs on the build host's native arch and cross-compiles for the target, so
+# an amd64 image can be built on an arm64 Mac without emulating the compile.
+FROM --platform=$BUILDPLATFORM golang:1.26 AS builder
+ARG TARGETARCH
 
 WORKDIR /src
 COPY harness/go.mod harness/go.sum ./
 RUN go mod download
 COPY harness/cmd/ cmd/
 COPY harness/internal/ internal/
-RUN CGO_ENABLED=0 go build -o /migration-harness ./cmd/migration-harness/
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /migration-harness ./cmd/migration-harness/
 
 # --- Runtime stage ---
 FROM registry.access.redhat.com/ubi10/ubi:latest
@@ -58,6 +61,12 @@ RUN mkdir -p /opt/skills /workspace /home/harness/.migration-harness \
     && chown -R 1001:0 /home/harness /workspace \
     && chmod -R g=u /home/harness /workspace \
     && chmod 1777 /tmp
+
+# Under OpenShift's restricted-v2 SCC the container gets a random UID with no
+# /etc/passwd entry, so HOME would otherwise resolve to the read-only "/".
+# goose (~/.config/goose), git and Maven (~/.m2) all write under it. The
+# directory is already GID-0 owned and g=u, so any random UID can write it.
+ENV HOME=/home/harness
 
 WORKDIR /workspace
 USER 1001
