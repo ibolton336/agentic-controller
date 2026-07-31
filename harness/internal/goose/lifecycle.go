@@ -35,6 +35,12 @@ const (
 // authentication key (from config.Config.ACPSecretKey). Provider, apiKey,
 // and endpoint are translated to provider-specific env vars so goose
 // serve knows how to authenticate with the LLM.
+//
+// Bind address follows authentication: with a secret key the server binds
+// all interfaces — in a Sandbox the platform attaches to <pod>:4000 through
+// the run's headless Service, which goose's default loopback bind would
+// refuse. Without a key (bare CLI use) it stays loopback-only; an
+// unauthenticated ACP server must never be reachable off-host.
 func StartServe(ctx context.Context, port int, secretKey, provider, model, apiKey, endpoint string) (*ServeProcess, error) {
 	goosePath, err := exec.LookPath("goose")
 	if err != nil {
@@ -45,7 +51,13 @@ func StartServe(ctx context.Context, port int, secretKey, provider, model, apiKe
 		port = DefaultACPPort
 	}
 
+	host := "127.0.0.1"
+	if secretKey != "" {
+		host = "0.0.0.0"
+	}
+
 	cmd := exec.CommandContext(ctx, goosePath, "serve",
+		"--host", host,
 		"--port", fmt.Sprintf("%d", port),
 		"--with-builtin", "developer",
 	)

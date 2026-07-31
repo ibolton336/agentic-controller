@@ -50,6 +50,10 @@ RUN ARCH=$(uname -m) \
 
 ENV PATH="/opt/migration-harness/bin:${PATH}"
 ENV HARNESS_WORK_DIR=/workspace/repo
+# OpenShift runs containers as a random UID with no passwd entry, which
+# leaves HOME=/ — goose then panics creating /.local/... (state, session
+# DBs). Pin HOME to the harness home, which is group-0 writable (g=u).
+ENV HOME=/home/harness
 
 COPY --from=builder /migration-harness /opt/migration-harness/bin/migration-harness
 
