@@ -190,6 +190,10 @@ func (c *SessionClient) SendPrompt(ctx context.Context, sessionID string, conten
 				}
 				continue
 			}
+			if msg.IsAgentRequest() {
+				c.answerAgentRequest(msg)
+				continue
+			}
 			if msg.ID != nil && *msg.ID == req.ID {
 				if msg.Error != nil {
 					return nil, fmt.Errorf("prompt error %d: %s", msg.Error.Code, msg.Error.Message)
@@ -200,6 +204,67 @@ func (c *SessionClient) SendPrompt(ctx context.Context, sessionID string, conten
 				return result, nil
 			}
 		}
+	}
+}
+
+// PermissionOption is one choice offered by a session/request_permission
+// request (kinds: allow_always, allow_once, reject_once, reject_always).
+type PermissionOption struct {
+	OptionID string `json:"optionId"`
+	Name     string `json:"name,omitempty"`
+	Kind     string `json:"kind,omitempty"`
+}
+
+// answerAgentRequest replies to a request goose initiates toward the client
+// (session/request_permission, elicitation/create, fs/*). These frames were
+// previously dropped on the floor — and goose parks the turn on the reply
+// with NO timeout; session/cancel cannot unpark it. Any session that enters
+// approve mode (GOOSE_MODE=approve / session/set_mode), or a SecurityInspector
+// escalation via SECURITY_PROMPT_ENABLED even in auto mode, would hang the
+// stage until the pod deadline.
+//
+// The harness is headless, so the policy is fail-closed: deny permission
+// requests explicitly (goose declines the tool and the turn continues) and
+// reject everything else with method-not-found (goose maps that to a
+// cancelled/declined outcome as well).
+func (c *SessionClient) answerAgentRequest(msg *RPCResponse) {
+	id := *msg.ID
+
+	if msg.Method != "session/request_permission" {
+		logging.Warn("agent request %q unsupported — rejecting (method not found)", msg.Method)
+		if err := c.ws.SendResponse(id, nil, &RPCError{Code: -32601, Message: "method not supported by harness"}); err != nil {
+			logging.Warn("reply to %s: %v", msg.Method, err)
+		}
+		return
+	}
+
+	var params struct {
+		ToolCall struct {
+			Title string `json:"title"`
+		} `json:"toolCall"`
+		Options []PermissionOption `json:"options"`
+	}
+	if err := json.Unmarshal(msg.Params, &params); err != nil {
+		logging.Warn("parse permission request: %v — cancelling it", err)
+		if err := c.ws.SendResponse(id, map[string]any{"outcome": map[string]any{"outcome": "cancelled"}}, nil); err != nil {
+			logging.Warn("reply to permission request: %v", err)
+		}
+		return
+	}
+
+	// Prefer an explicit one-shot rejection; an unknown or missing option
+	// falls back to the cancelled outcome, which goose also treats as a
+	// decline (fail-closed on its side too).
+	outcome := map[string]any{"outcome": "cancelled"}
+	for _, opt := range params.Options {
+		if opt.Kind == "reject_once" {
+			outcome = map[string]any{"outcome": "selected", "optionId": opt.OptionID}
+			break
+		}
+	}
+	logging.Warn("goose asked permission for %q — headless harness denies it", params.ToolCall.Title)
+	if err := c.ws.SendResponse(id, map[string]any{"outcome": outcome}, nil); err != nil {
+		logging.Warn("reply to permission request: %v", err)
 	}
 }
 
