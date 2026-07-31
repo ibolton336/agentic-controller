@@ -252,7 +252,7 @@ func buildPrompt(skillContent string) string {
 		b.WriteString("\n\n")
 	}
 
-	if v := os.Getenv("KONVEYOR_PLAYBOOK_INSTRUCTIONS"); v != "" {
+	if v := os.Getenv("KONVEYOR_WORKLOAD_INSTRUCTIONS"); v != "" {
 		b.WriteString("## Migration Context\n\n")
 		b.WriteString(v)
 		b.WriteString("\n\n")

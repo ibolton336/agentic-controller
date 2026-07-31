@@ -1,5 +1,5 @@
 # Shared resources for harness integration tests in Kind.
-# Creates: LLMProvider (used by playbook-resources.yaml)
+# Creates: LLMProvider (used by workload-resources.yaml)
 #
 # Usage:
 #   hack/harness-test/setup.sh

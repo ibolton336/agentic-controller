@@ -21,10 +21,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// AgentPlaybookRunStageStatus tracks the status of a single stage within
-// a playbook run.
-type AgentPlaybookRunStageStatus struct {
-	// Name is the stage name, matching a stage in the AgentPlaybook.
+// AgentWorkloadRunStageStatus tracks the status of a single stage within
+// a workload run.
+type AgentWorkloadRunStageStatus struct {
+	// Name is the stage name, matching a stage in the AgentWorkload.
 	Name string `json:"name"`
 
 	// Phase is the current phase of this stage.
@@ -35,13 +35,13 @@ type AgentPlaybookRunStageStatus struct {
 	AgentRunName string `json:"agentRunName,omitempty"`
 }
 
-// AgentPlaybookRunSpec defines the desired state of an AgentPlaybookRun.
+// AgentWorkloadRunSpec defines the desired state of an AgentWorkloadRun.
 // The spec is immutable once created — delete and recreate to change values.
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec is immutable"
-type AgentPlaybookRunSpec struct {
-	// PlaybookRef is the name of the AgentPlaybook CR to execute.
+type AgentWorkloadRunSpec struct {
+	// WorkloadRef is the name of the AgentWorkload CR to execute.
 	// +kubebuilder:validation:MinLength=1
-	PlaybookRef string `json:"playbookRef"`
+	WorkloadRef string `json:"workloadRef"`
 
 	// Models selects specific provider/model combinations for all stages.
 	// Individual stages may override these selections in the future.
@@ -67,9 +67,9 @@ type AgentPlaybookRunSpec struct {
 	EnvFrom []corev1.EnvFromSource `json:"envFrom,omitempty"`
 }
 
-// AgentPlaybookRunStatus defines the observed state of an AgentPlaybookRun.
-type AgentPlaybookRunStatus struct {
-	// Phase is the current phase of the overall playbook run.
+// AgentWorkloadRunStatus defines the observed state of an AgentWorkloadRun.
+type AgentWorkloadRunStatus struct {
+	// Phase is the current phase of the overall workload run.
 	// +kubebuilder:default=Pending
 	// +optional
 	Phase AgentRunPhase `json:"phase,omitempty"`
@@ -86,18 +86,18 @@ type AgentPlaybookRunStatus struct {
 	// +optional
 	// +listType=map
 	// +listMapKey=name
-	Stages []AgentPlaybookRunStageStatus `json:"stages,omitempty"`
+	Stages []AgentWorkloadRunStageStatus `json:"stages,omitempty"`
 
-	// StartTime is the time the playbook run started.
+	// StartTime is the time the workload run started.
 	// +optional
 	StartTime *metav1.Time `json:"startTime,omitempty"`
 
-	// CompletionTime is the time the playbook run finished.
+	// CompletionTime is the time the workload run finished.
 	// +optional
 	CompletionTime *metav1.Time `json:"completionTime,omitempty"`
 
 	// Conditions represent the latest available observations of the
-	// AgentPlaybookRun's state.
+	// AgentWorkloadRun's state.
 	// +optional
 	// +listType=map
 	// +listMapKey=type
@@ -106,29 +106,29 @@ type AgentPlaybookRunStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:shortName=apr
-// +kubebuilder:printcolumn:name="Playbook",type=string,JSONPath=`.spec.playbookRef`
+// +kubebuilder:resource:shortName=awr
+// +kubebuilder:printcolumn:name="Workload",type=string,JSONPath=`.spec.workloadRef`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Current Stage",type=string,JSONPath=`.status.currentStage`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// AgentPlaybookRun is a request to execute an AgentPlaybook. It references
-// an AgentPlaybook and carries generic parameters. The controller orchestrates
+// AgentWorkloadRun is a request to execute an AgentWorkload. It references
+// an AgentWorkload and carries generic parameters. The controller orchestrates
 // execution: creates an AgentRun per stage, manages cross-stage handoff via
 // committed files on a shared target branch.
-type AgentPlaybookRun struct {
+type AgentWorkloadRun struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   AgentPlaybookRunSpec   `json:"spec,omitempty"`
-	Status AgentPlaybookRunStatus `json:"status,omitempty"`
+	Spec   AgentWorkloadRunSpec   `json:"spec,omitempty"`
+	Status AgentWorkloadRunStatus `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 
-// AgentPlaybookRunList contains a list of AgentPlaybookRun.
-type AgentPlaybookRunList struct {
+// AgentWorkloadRunList contains a list of AgentWorkloadRun.
+type AgentWorkloadRunList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []AgentPlaybookRun `json:"items"`
+	Items           []AgentWorkloadRun `json:"items"`
 }

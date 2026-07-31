@@ -376,17 +376,17 @@ var _ = Describe("CRD Validation", func() {
 		})
 	})
 
-	// ── AgentPlaybook ──────────────────────────────────────────────────
-	Context("AgentPlaybook", func() {
-		It("should accept a valid AgentPlaybook", func() {
-			ap := &konveyoriov1alpha1.AgentPlaybook{
+	// ── AgentWorkload ──────────────────────────────────────────────────
+	Context("AgentWorkload", func() {
+		It("should accept a valid AgentWorkload", func() {
+			ap := &konveyoriov1alpha1.AgentWorkload{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "ap-valid-test",
 					Namespace: testNamespace,
 				},
-				Spec: konveyoriov1alpha1.AgentPlaybookSpec{
+				Spec: konveyoriov1alpha1.AgentWorkloadSpec{
 					Guide: "Migrate a Java EE application to Quarkus.",
-					Stages: []konveyoriov1alpha1.AgentPlaybookStage{
+					Stages: []konveyoriov1alpha1.AgentWorkloadStage{
 						{Name: "discover", AgentRef: "discovery-agent", Instructions: "Analyze the app."},
 						{Name: "implement", AgentRef: "migration-agent", Instructions: "Execute migration."},
 					},
@@ -396,15 +396,15 @@ var _ = Describe("CRD Validation", func() {
 			Expect(k8sClient.Delete(ctx, ap)).To(Succeed())
 		})
 
-		It("should reject an AgentPlaybook with empty stages", func() {
-			ap := &konveyoriov1alpha1.AgentPlaybook{
+		It("should reject an AgentWorkload with empty stages", func() {
+			ap := &konveyoriov1alpha1.AgentWorkload{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "ap-empty-stages-test",
 					Namespace: testNamespace,
 				},
-				Spec: konveyoriov1alpha1.AgentPlaybookSpec{
+				Spec: konveyoriov1alpha1.AgentWorkloadSpec{
 					Guide:  "No stages here.",
-					Stages: []konveyoriov1alpha1.AgentPlaybookStage{},
+					Stages: []konveyoriov1alpha1.AgentWorkloadStage{},
 				},
 			}
 			err := k8sClient.Create(ctx, ap)
@@ -458,16 +458,16 @@ var _ = Describe("CRD Validation", func() {
 		})
 	})
 
-	// ── AgentPlaybookRun ───────────────────────────────────────────────
-	Context("AgentPlaybookRun", func() {
-		It("should accept a valid AgentPlaybookRun", func() {
-			apr := &konveyoriov1alpha1.AgentPlaybookRun{
+	// ── AgentWorkloadRun ───────────────────────────────────────────────
+	Context("AgentWorkloadRun", func() {
+		It("should accept a valid AgentWorkloadRun", func() {
+			apr := &konveyoriov1alpha1.AgentWorkloadRun{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "apr-valid-test",
 					Namespace: testNamespace,
 				},
-				Spec: konveyoriov1alpha1.AgentPlaybookRunSpec{
-					PlaybookRef: "java-migration",
+				Spec: konveyoriov1alpha1.AgentWorkloadRunSpec{
+					WorkloadRef: "java-migration",
 					Models: []konveyoriov1alpha1.AgentRunModelSelection{
 						{Role: testRolePrimary, Provider: "anthropic", Model: testModel},
 					},
@@ -488,25 +488,25 @@ var _ = Describe("CRD Validation", func() {
 			Expect(k8sClient.Delete(ctx, apr)).To(Succeed())
 		})
 
-		It("should reject mutation of playbookRef", func() {
-			apr := &konveyoriov1alpha1.AgentPlaybookRun{
+		It("should reject mutation of workloadRef", func() {
+			apr := &konveyoriov1alpha1.AgentWorkloadRun{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "apr-immutable-test",
 					Namespace: testNamespace,
 				},
-				Spec: konveyoriov1alpha1.AgentPlaybookRunSpec{
-					PlaybookRef: "original-playbook",
+				Spec: konveyoriov1alpha1.AgentWorkloadRunSpec{
+					WorkloadRef: "original-workload",
 				},
 			}
 			Expect(k8sClient.Create(ctx, apr)).To(Succeed())
 
-			apr.Spec.PlaybookRef = "different-playbook"
+			apr.Spec.WorkloadRef = "different-workload"
 			err := k8sClient.Update(ctx, apr)
 			Expect(err).To(HaveOccurred())
 			Expect(errors.IsInvalid(err)).To(BeTrue(), fmt.Sprintf("expected Invalid error, got: %v", err))
 
 			// Clean up
-			apr.Spec.PlaybookRef = "original-playbook"
+			apr.Spec.WorkloadRef = "original-workload"
 			Expect(k8sClient.Delete(ctx, apr)).To(Succeed())
 		})
 	})

@@ -33,10 +33,10 @@ const (
 	// labelAgent identifies resources belonging to an Agent.
 	labelAgent = "konveyor.io/agent"
 
-	// labelAgentPlaybookRun identifies resources belonging to an AgentPlaybookRun.
-	labelAgentPlaybookRun = "konveyor.io/agentplaybookrun"
+	// labelAgentWorkloadRun identifies resources belonging to an AgentWorkloadRun.
+	labelAgentWorkloadRun = "konveyor.io/agentworkloadrun"
 
-	// labelStage identifies the playbook stage a resource belongs to.
+	// labelStage identifies the workload stage a resource belongs to.
 	labelStage = "konveyor.io/stage"
 
 	// reasonSucceeded is the condition reason for successful completion.

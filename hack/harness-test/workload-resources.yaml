@@ -1,4 +1,4 @@
-# Example resources for testing the AgentPlaybook + AgentPlaybookRun flow.
+# Example resources for testing the AgentWorkload + AgentWorkloadRun flow.
 # Migrates the coolstore Java EE app to Quarkus using 3 stages.
 #
 # Prerequisites:
@@ -7,7 +7,7 @@
 #
 # Usage:
 #   kubectl apply -f hack/harness-test/resources.yaml
-#   kubectl apply -f hack/harness-test/playbook-resources.yaml
+#   kubectl apply -f hack/harness-test/workload-resources.yaml
 
 ---
 apiVersion: konveyor.io/v1alpha1
@@ -130,7 +130,7 @@ spec:
 
 ---
 apiVersion: konveyor.io/v1alpha1
-kind: AgentPlaybook
+kind: AgentWorkload
 metadata:
   name: java-ee-to-quarkus
 spec:
@@ -148,11 +148,11 @@ spec:
 
 ---
 apiVersion: konveyor.io/v1alpha1
-kind: AgentPlaybookRun
+kind: AgentWorkloadRun
 metadata:
   name: coolstore-migration-__TIMESTAMP__
 spec:
-  playbookRef: java-ee-to-quarkus
+  workloadRef: java-ee-to-quarkus
   models:
     - role: primary
       provider: gcp-vertex-ai

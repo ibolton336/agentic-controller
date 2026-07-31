@@ -29,7 +29,7 @@ import (
 	konveyoriov1alpha1 "github.com/konveyor/agentic-controller/api/v1alpha1"
 )
 
-var _ = Describe("AgentPlaybook Controller", func() {
+var _ = Describe("AgentWorkload Controller", func() {
 	const (
 		timeout  = 10 * time.Second
 		interval = 250 * time.Millisecond
@@ -37,23 +37,23 @@ var _ = Describe("AgentPlaybook Controller", func() {
 
 	Context("when a stage references a non-existent Agent", func() {
 		const (
-			playbookName = "ap-ctrl-missing-agent"
+			workloadName = "ap-ctrl-missing-agent"
 		)
 
 		It("should set Ready=False with AgentsNotReady", func() {
-			playbook := &konveyoriov1alpha1.AgentPlaybook{
-				ObjectMeta: metav1.ObjectMeta{Name: playbookName, Namespace: testNamespace},
-				Spec: konveyoriov1alpha1.AgentPlaybookSpec{
-					Stages: []konveyoriov1alpha1.AgentPlaybookStage{
+			workload := &konveyoriov1alpha1.AgentWorkload{
+				ObjectMeta: metav1.ObjectMeta{Name: workloadName, Namespace: testNamespace},
+				Spec: konveyoriov1alpha1.AgentWorkloadSpec{
+					Stages: []konveyoriov1alpha1.AgentWorkloadStage{
 						{Name: "plan", AgentRef: "nonexistent-agent"},
 					},
 				},
 			}
-			Expect(k8sClient.Create(ctx, playbook)).To(Succeed())
+			Expect(k8sClient.Create(ctx, workload)).To(Succeed())
 
-			key := types.NamespacedName{Name: playbookName, Namespace: testNamespace}
+			key := types.NamespacedName{Name: workloadName, Namespace: testNamespace}
 			Eventually(func(g Gomega) {
-				var fetched konveyoriov1alpha1.AgentPlaybook
+				var fetched konveyoriov1alpha1.AgentWorkload
 				g.Expect(k8sClient.Get(ctx, key, &fetched)).To(Succeed())
 				readyCond := meta.FindStatusCondition(fetched.Status.Conditions, ConditionTypeReady)
 				g.Expect(readyCond).NotTo(BeNil())
@@ -62,13 +62,13 @@ var _ = Describe("AgentPlaybook Controller", func() {
 				g.Expect(readyCond.Message).To(ContainSubstring("nonexistent-agent"))
 			}, timeout, interval).Should(Succeed())
 
-			Expect(k8sClient.Delete(ctx, playbook)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, workload)).To(Succeed())
 		})
 	})
 
 	Context("when all stage Agents exist and are Ready", func() {
 		const (
-			playbookName = "ap-ctrl-all-ready"
+			workloadName = "ap-ctrl-all-ready"
 			agentName1   = "ap-ctrl-agent-1"
 			agentName2   = "ap-ctrl-agent-2"
 			provName     = "ap-prov-ready"
@@ -99,21 +99,21 @@ var _ = Describe("AgentPlaybook Controller", func() {
 			Expect(k8sClient.Create(ctx, agent2)).To(Succeed())
 			waitForAgentReady(agentName2)
 
-			playbook := &konveyoriov1alpha1.AgentPlaybook{
-				ObjectMeta: metav1.ObjectMeta{Name: playbookName, Namespace: testNamespace},
-				Spec: konveyoriov1alpha1.AgentPlaybookSpec{
-					Guide: "Test migration playbook",
-					Stages: []konveyoriov1alpha1.AgentPlaybookStage{
+			workload := &konveyoriov1alpha1.AgentWorkload{
+				ObjectMeta: metav1.ObjectMeta{Name: workloadName, Namespace: testNamespace},
+				Spec: konveyoriov1alpha1.AgentWorkloadSpec{
+					Guide: "Test migration workload",
+					Stages: []konveyoriov1alpha1.AgentWorkloadStage{
 						{Name: "plan", AgentRef: agentName1, Instructions: "Create a plan"},
 						{Name: "execute", AgentRef: agentName2, Instructions: "Execute the plan"},
 					},
 				},
 			}
-			Expect(k8sClient.Create(ctx, playbook)).To(Succeed())
+			Expect(k8sClient.Create(ctx, workload)).To(Succeed())
 
-			key := types.NamespacedName{Name: playbookName, Namespace: testNamespace}
+			key := types.NamespacedName{Name: workloadName, Namespace: testNamespace}
 			Eventually(func(g Gomega) {
-				var fetched konveyoriov1alpha1.AgentPlaybook
+				var fetched konveyoriov1alpha1.AgentWorkload
 				g.Expect(k8sClient.Get(ctx, key, &fetched)).To(Succeed())
 				readyCond := meta.FindStatusCondition(fetched.Status.Conditions, ConditionTypeReady)
 				g.Expect(readyCond).NotTo(BeNil())
@@ -121,7 +121,7 @@ var _ = Describe("AgentPlaybook Controller", func() {
 				g.Expect(readyCond.Reason).To(Equal("AllAgentsReady"))
 			}, timeout, interval).Should(Succeed())
 
-			Expect(k8sClient.Delete(ctx, playbook)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, workload)).To(Succeed())
 			Expect(k8sClient.Delete(ctx, agent1)).To(Succeed())
 			Expect(k8sClient.Delete(ctx, agent2)).To(Succeed())
 		})

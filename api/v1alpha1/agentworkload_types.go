@@ -20,10 +20,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// AgentPlaybookStage defines one stage in a playbook.
+// AgentWorkloadStage defines one stage in a workload.
 // Each stage references an Agent and carries instructions.
-type AgentPlaybookStage struct {
-	// Name is the stage name, unique within the playbook.
+type AgentWorkloadStage struct {
+	// Name is the stage name, unique within the workload.
 	// Must be a valid Kubernetes label value (lowercase alphanumeric,
 	// hyphens, dots, max 63 chars) since it is used in labels on
 	// child AgentRun resources.
@@ -42,8 +42,8 @@ type AgentPlaybookStage struct {
 	Instructions string `json:"instructions,omitempty"`
 }
 
-// AgentPlaybookSpec defines the desired state of an AgentPlaybook.
-type AgentPlaybookSpec struct {
+// AgentWorkloadSpec defines the desired state of an AgentWorkload.
+type AgentWorkloadSpec struct {
 	// Guide is a high-level guide providing ambient context for all stages.
 	// Written as a context file in the workspace so each agent understands
 	// where its work fits in the bigger picture.
@@ -57,17 +57,17 @@ type AgentPlaybookSpec struct {
 	// +kubebuilder:validation:MinItems=1
 	// +listType=map
 	// +listMapKey=name
-	Stages []AgentPlaybookStage `json:"stages"`
+	Stages []AgentWorkloadStage `json:"stages"`
 }
 
-// AgentPlaybookStatus defines the observed state of an AgentPlaybook.
-type AgentPlaybookStatus struct {
+// AgentWorkloadStatus defines the observed state of an AgentWorkload.
+type AgentWorkloadStatus struct {
 	// ObservedGeneration is the most recent generation observed by the controller.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
 	// Conditions represent the latest available observations of the
-	// AgentPlaybook's state.
+	// AgentWorkload's state.
 	// +optional
 	// +listType=map
 	// +listMapKey=type
@@ -76,27 +76,27 @@ type AgentPlaybookStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:shortName=ap
+// +kubebuilder:resource:shortName=aw
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// AgentPlaybook is a reusable playbook combining a high-level guide with an
+// AgentWorkload is a reusable workload combining a high-level guide with an
 // ordered sequence of stages. Each stage references an Agent and carries
-// instructions. An AgentPlaybook is a template — creating one does not
+// instructions. An AgentWorkload is a template — creating one does not
 // execute anything.
-type AgentPlaybook struct {
+type AgentWorkload struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   AgentPlaybookSpec   `json:"spec,omitempty"`
-	Status AgentPlaybookStatus `json:"status,omitempty"`
+	Spec   AgentWorkloadSpec   `json:"spec,omitempty"`
+	Status AgentWorkloadStatus `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 
-// AgentPlaybookList contains a list of AgentPlaybook.
-type AgentPlaybookList struct {
+// AgentWorkloadList contains a list of AgentWorkload.
+type AgentWorkloadList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []AgentPlaybook `json:"items"`
+	Items           []AgentWorkload `json:"items"`
 }

@@ -38,10 +38,10 @@ rules:
 - apiGroups:
   - konveyor.io
   resources:
-  - agentplaybookruns
-  - agentplaybooks
   - agentruns
   - agents
+  - agentworkloadruns
+  - agentworkloads
   - llmproviders
   - skillcards
   - skillcollections
@@ -56,10 +56,10 @@ rules:
 - apiGroups:
   - konveyor.io
   resources:
-  - agentplaybookruns/finalizers
-  - agentplaybooks/finalizers
   - agentruns/finalizers
   - agents/finalizers
+  - agentworkloadruns/finalizers
+  - agentworkloads/finalizers
   - llmproviders/finalizers
   - skillcards/finalizers
   - skillcollections/finalizers
@@ -68,10 +68,10 @@ rules:
 - apiGroups:
   - konveyor.io
   resources:
-  - agentplaybookruns/status
-  - agentplaybooks/status
   - agentruns/status
   - agents/status
+  - agentworkloadruns/status
+  - agentworkloads/status
   - llmproviders/status
   - skillcards/status
   - skillcollections/status

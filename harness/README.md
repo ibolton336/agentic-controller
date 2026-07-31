@@ -23,7 +23,7 @@
 └──────────────────────────────────────────────────────┘
 ```
 
-The harness sends **one prompt** per stage. The AgentPlaybookRun controller handles stage sequencing — the harness is identical in every stage image.
+The harness sends **one prompt** per stage. The AgentWorkloadRun controller handles stage sequencing — the harness is identical in every stage image.
 
 ---
 
@@ -70,7 +70,7 @@ All configuration is via environment variables — there is no config file or `i
 | `HARNESS_WORK_DIR` | `/workspace/repo` | Clone directory |
 | `HARNESS_SKILLS_DIR` | `/opt/skills` | Skills mount directory |
 | `KONVEYOR_PROMPT` | — | Agent-level standing instructions |
-| `KONVEYOR_PLAYBOOK_INSTRUCTIONS` | — | Playbook guide context |
+| `KONVEYOR_WORKLOAD_INSTRUCTIONS` | — | Workload guide context |
 | `KONVEYOR_INSTRUCTIONS` | — | Stage-specific task instructions |
 
 ---

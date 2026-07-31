@@ -5,14 +5,17 @@
 #   podman build -t agent-base -f images/agent-base/Containerfile .
 
 # --- Build stage ---
-FROM golang:1.26 AS builder
+# Runs on the build host's native arch and cross-compiles for the target, so
+# an amd64 image can be built on an arm64 Mac without emulating the compile.
+FROM --platform=$BUILDPLATFORM golang:1.26 AS builder
+ARG TARGETARCH
 
 WORKDIR /src
 COPY harness/go.mod harness/go.sum ./
 RUN go mod download
 COPY harness/cmd/ cmd/
 COPY harness/internal/ internal/
-RUN CGO_ENABLED=0 go build -o /migration-harness ./cmd/migration-harness/
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /migration-harness ./cmd/migration-harness/
 
 # --- Runtime stage ---
 FROM registry.access.redhat.com/ubi10/ubi:latest
@@ -63,7 +66,6 @@ RUN mkdir -p /opt/skills /workspace /home/harness/.migration-harness \
     && chmod -R g=u /home/harness /workspace \
     && chmod 1777 /tmp
 
-ENV HOME=/home/harness
 WORKDIR /workspace
 USER 1001
 

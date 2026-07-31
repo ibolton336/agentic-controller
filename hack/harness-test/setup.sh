@@ -105,11 +105,11 @@ TIMESTAMP=$(date +%s)
 sed -e "s/__GCP_PROJECT_ID__/$GCP_PROJECT_ID/g" \
     -e "s/__TIMESTAMP__/$TIMESTAMP/g" \
     -e "s|__HUB_TOKEN__|$HUB_TOKEN|g" \
-    "$SCRIPT_DIR/playbook-resources.yaml" | kubectl apply -f -
-echo "  AgentPlaybookRun: coolstore-migration-$TIMESTAMP"
+    "$SCRIPT_DIR/workload-resources.yaml" | kubectl apply -f -
+echo "  AgentWorkloadRun: coolstore-migration-$TIMESTAMP"
 
 echo ""
 echo "=== Done ==="
-echo "Watch the run: kubectl get agentplaybookrun coolstore-migration-$TIMESTAMP -w"
+echo "Watch the run: kubectl get agentworkloadrun coolstore-migration-$TIMESTAMP -w"
 echo "Check pods:    kubectl get pods"
 echo "View logs:     kubectl logs -f coolstore-migration-${TIMESTAMP}-plan -c agent"
