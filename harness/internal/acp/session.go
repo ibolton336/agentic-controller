@@ -14,9 +14,12 @@ type SessionClient struct {
 	initialized bool
 }
 
-// NewSessionClient creates a session client from an existing WebSocket connection.
+// NewSessionClient creates a session client from an existing WebSocket
+// connection and takes over answering agent-initiated requests on it.
 func NewSessionClient(ws *WSClient) *SessionClient {
-	return &SessionClient{ws: ws}
+	c := &SessionClient{ws: ws}
+	ws.SetAgentRequestHandler(c.answerAgentRequest)
+	return c
 }
 
 // InitParams are required for the ACP initialize handshake.
@@ -165,6 +168,11 @@ func (c *SessionClient) SendPrompt(ctx context.Context, sessionID string, conten
 		Prompt:    content,
 	})
 
+	respCh := c.ws.registerPending(req.ID)
+	defer c.ws.unregisterPending(req.ID)
+	sinkID, notifCh := c.ws.addNotifSink()
+	defer c.ws.removeNotifSink(sinkID)
+
 	if err := c.ws.Send(req); err != nil {
 		return nil, fmt.Errorf("send prompt: %w", err)
 	}
@@ -172,37 +180,32 @@ func (c *SessionClient) SendPrompt(ctx context.Context, sessionID string, conten
 	result := &PromptResult{}
 	turnCount := 0
 
+	// Agent-initiated requests (permission asks) no longer appear here —
+	// the demux dispatches them to answerAgentRequest on their own
+	// goroutine, so a parked ask cannot stall notification handling.
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-c.ws.Done():
 			return nil, fmt.Errorf("websocket connection closed during prompt")
-		case msg := <-c.ws.Recv():
-			if msg.IsNotification() {
-				if isToolCall(msg) {
-					turnCount++
-				}
-				handlePromptNotification(msg, result)
-				if maxTurns > 0 && turnCount >= maxTurns {
-					logging.Warn("max turns reached (%d), terminating", maxTurns)
-					return result, fmt.Errorf("max turns reached (%d)", maxTurns)
-				}
-				continue
+		case msg := <-notifCh:
+			if isToolCall(msg) {
+				turnCount++
 			}
-			if msg.IsAgentRequest() {
-				c.answerAgentRequest(msg)
-				continue
+			handlePromptNotification(msg, result)
+			if maxTurns > 0 && turnCount >= maxTurns {
+				logging.Warn("max turns reached (%d), terminating", maxTurns)
+				return result, fmt.Errorf("max turns reached (%d)", maxTurns)
 			}
-			if id, ok := msg.IntID(); ok && id == req.ID {
-				if msg.Error != nil {
-					return nil, fmt.Errorf("prompt error %d: %s", msg.Error.Code, msg.Error.Message)
-				}
-				if err := json.Unmarshal(msg.Result, result); err != nil {
-					return nil, fmt.Errorf("parse prompt result: %w", err)
-				}
-				return result, nil
+		case msg := <-respCh:
+			if msg.Error != nil {
+				return nil, fmt.Errorf("prompt error %d: %s", msg.Error.Code, msg.Error.Message)
 			}
+			if err := json.Unmarshal(msg.Result, result); err != nil {
+				return nil, fmt.Errorf("parse prompt result: %w", err)
+			}
+			return result, nil
 		}
 	}
 }
