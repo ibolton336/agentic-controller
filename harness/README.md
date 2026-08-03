@@ -72,6 +72,8 @@ All configuration is via environment variables — there is no config file or `i
 | `KONVEYOR_PROMPT` | — | Agent-level standing instructions |
 | `KONVEYOR_WORKFLOW_GUIDE` | — | Workflow guide context |
 | `KONVEYOR_INSTRUCTIONS` | — | Stage-specific task instructions |
+| `HARNESS_ACP_TEE` | `on` | `off` disables the ACP tee; goose then owns :4000 directly |
+| `HARNESS_HITL_TIMEOUT_SECONDS` | `180` | How long a permission ask waits for an attached viewer |
 
 ---
 
@@ -108,11 +110,38 @@ internal/
 ├── config/        Env-var configuration
 ├── acp/           ACP WebSocket client (session, prompt)
 ├── goose/         goose serve lifecycle (start, health, stop)
+├── tee/           Pod-facing ACP endpoint: pipe, live tee, HITL relay
 ├── hub/           Konveyor Hub API client (app, creds, analysis)
 ├── git/           Credential-isolated git operations (go-git)
 ├── watcher/       Debounced filesystem watcher (fsnotify)
 └── logging/       Colored terminal output
 ```
+
+### The ACP tee
+
+goose gives every WebSocket connection a private agent with no
+cross-connection fan-out, so a client dialing the pod could never see the
+run's live session. The harness therefore owns the pod ACP port and
+fronts goose:
+
+```
+viewer ──(hub WS proxy)──▶ pod:4000 = harness tee ──▶ 127.0.0.1:4001 = goose serve
+                                       ▲
+                        harness's own run connection (session, prompt)
+```
+
+- Each attached client gets a verbatim frame pipe to its own goose
+  connection — interactive chat is unchanged.
+- The run connection's `session/update` notifications are teed to every
+  attached client unmodified, so an ACP-speaking UI renders the run live.
+- `session/request_permission` asks from the run are offered to attached
+  viewers first (`kperm-*` ids, first answer wins, relayed verbatim);
+  with nobody attached — or on `HARNESS_HITL_TIMEOUT_SECONDS` expiry
+  with no `allow_once` option — the headless fail-closed deny applies.
+- The tee can never fail the run: bounded per-viewer queues (slow viewers
+  are dropped), panics recovered per connection, and a listener failure
+  only costs live viewing. `/healthz` stays unauthenticated.
+- `HARNESS_ACP_TEE=off` restores goose owning `:4000` directly.
 
 ### Key design decisions
 

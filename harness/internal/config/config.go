@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 )
 
 const (
@@ -23,6 +24,14 @@ type Config struct {
 	ACPSecretKey string
 
 	TargetBranch string
+
+	// ACPTee: the harness fronts the pod ACP port and tees the run's
+	// live stream to attached viewers (default on; HARNESS_ACP_TEE=off
+	// restores goose owning the port directly).
+	ACPTee bool
+	// HITLTimeout: how long a permission ask waits for an attached
+	// viewer before the headless fallback (HARNESS_HITL_TIMEOUT_SECONDS).
+	HITLTimeout time.Duration
 
 	// Prompt context layers, composed by internal/prompt.
 	AgentPrompt       string
@@ -64,6 +73,18 @@ func LoadFromEnv() (*Config, error) {
 
 	if n, err := strconv.Atoi(os.Getenv("KONVEYOR_PARAM_MAX_TURNS")); err == nil && n > 0 {
 		cfg.MaxTurns = n
+	}
+
+	// Default-ON kill switch: the one E2E path must exercise the tee, so
+	// only an explicit opt-out disables it.
+	switch os.Getenv("HARNESS_ACP_TEE") {
+	case "off", "false", "0", "disabled":
+		cfg.ACPTee = false
+	default:
+		cfg.ACPTee = true
+	}
+	if n, err := strconv.Atoi(os.Getenv("HARNESS_HITL_TIMEOUT_SECONDS")); err == nil && n > 0 {
+		cfg.HITLTimeout = time.Duration(n) * time.Second
 	}
 
 	return cfg, nil
