@@ -135,9 +135,13 @@ viewer ──(hub WS proxy)──▶ pod:4000 = harness tee ──▶ 127.0.0.1:
 - The run connection's `session/update` notifications are teed to every
   attached client unmodified, so an ACP-speaking UI renders the run live.
 - `session/request_permission` asks from the run are offered to attached
-  viewers first (`kperm-*` ids, first answer wins, relayed verbatim);
-  with nobody attached — or on `HARNESS_HITL_TIMEOUT_SECONDS` expiry
-  with no `allow_once` option — the headless fail-closed deny applies.
+  viewers first (`kperm-*` ids, first answer wins, relayed verbatim).
+  Everything else fails closed: nobody attached denies immediately, and
+  an ask no viewer answers within `HARNESS_HITL_TIMEOUT_SECONDS` denies
+  too — an ask that self-approves on a timer is no ask at all. After a
+  timeout the viewers are considered unresponsive and follow-up asks
+  deny fast (no per-ask wait) until a new attach or any viewer click
+  shows a human is back, which caps the deny/retry turn burn.
 - The tee can never fail the run: bounded per-viewer queues (slow viewers
   are dropped), panics recovered per connection, and a listener failure
   only costs live viewing. `/healthz` stays unauthenticated.

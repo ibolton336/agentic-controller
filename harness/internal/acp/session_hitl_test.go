@@ -109,13 +109,15 @@ func TestPermissionForwardAnswered(t *testing.T) {
 	}
 }
 
-// A viewer that walks away mid-ask resolves allow_once — never a decline,
-// which goose retries into a MaxTurns burn.
-func TestPermissionForwardTimeoutAllowsOnce(t *testing.T) {
+// A viewer that walks away mid-ask gets the same fail-closed deny as
+// nobody being attached — an ask that self-approves on a timer is no ask.
+// (Retry burn is capped by the forwarder's unresponsive gate, not by
+// approving unattended actions.)
+func TestPermissionForwardTimeoutDenies(t *testing.T) {
 	reply := runPermissionScenario(t, &stubForwarder{outcome: ForwardTimeout})
 	kind, opt := selectedOption(t, reply)
-	if kind != "selected" || opt != "opt-ao" {
-		t.Fatalf("timeout should allow once, got %s/%s", kind, opt)
+	if kind != "selected" || opt != "opt-ro" {
+		t.Fatalf("timeout should deny fail-closed, got %s/%s", kind, opt)
 	}
 }
 

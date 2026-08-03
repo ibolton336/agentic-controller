@@ -371,17 +371,37 @@ func TestForwardPermission(t *testing.T) {
 		t.Fatalf("result not relayed: %s", out.result)
 	}
 
-	// Unanswered ask times out.
+	// Unanswered ask times out — and flips viewers to unresponsive.
 	if _, outcome := s.ForwardPermission(params); outcome != acp.ForwardTimeout {
 		t.Fatalf("expected Timeout, got %v", outcome)
 	}
 
-	// A late answer to the timed-out ask is ignored, not crashed on.
+	// While unresponsive, the next ask fast-denies instead of parking for
+	// another full window (measured: must return well under the timeout).
+	start := time.Now()
+	if _, outcome := s.ForwardPermission(params); outcome != acp.ForwardNoViewers {
+		t.Fatalf("unresponsive viewers should fast fail-closed, got %v", outcome)
+	}
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Fatalf("fast-deny took %v — parked on the timeout window", elapsed)
+	}
+
+	// A late answer to the timed-out ask is ignored as an answer, but it
+	// proves a human is present — forwarding resumes.
 	late := `{"jsonrpc":"2.0","id":"kperm-2","result":{"outcome":{"outcome":"cancelled"}}}`
 	if err := v.conn.WriteMessage(websocket.TextMessage, []byte(late)); err != nil {
 		t.Fatalf("late answer write: %v", err)
 	}
-	time.Sleep(100 * time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
+	for !s.responsive.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("late kperm answer did not restore responsiveness")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, outcome := s.ForwardPermission(params); outcome != acp.ForwardTimeout {
+		t.Fatalf("after human activity asks should forward again, got %v", outcome)
+	}
 }
 
 // The drop policy is a unit property of viewer.enqueue: a full queue

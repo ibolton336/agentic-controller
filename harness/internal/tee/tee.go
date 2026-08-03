@@ -87,6 +87,13 @@ type Server struct {
 	perms   map[string]chan json.RawMessage
 	stopped bool
 
+	// responsive tracks whether attached viewers show signs of a human:
+	// set on attach and on any kperm answer, cleared when an ask times
+	// out. While false, permission asks resolve NoViewers immediately —
+	// one slow timeout, then fast fail-closed denies instead of parking
+	// every retried ask for the full window.
+	responsive atomic.Bool
+
 	permSeq     atomic.Int64
 	unsubscribe func()
 }
@@ -203,6 +210,14 @@ func (s *Server) ForwardPermission(params json.RawMessage) (json.RawMessage, acp
 		s.mu.Unlock()
 		return nil, acp.ForwardNoViewers
 	}
+	if !s.responsive.Load() {
+		// Viewers are attached but a previous ask already timed out and
+		// nothing human has happened since — don't park this ask for
+		// another full window.
+		s.mu.Unlock()
+		logging.Info("tee: permission ask %s — viewers unresponsive, fast fail-closed", id)
+		return nil, acp.ForwardNoViewers
+	}
 	s.perms[id] = ch
 	for v := range s.viewers {
 		v.enqueue(outFrame{websocket.TextMessage, frame})
@@ -221,6 +236,7 @@ func (s *Server) ForwardPermission(params json.RawMessage) (json.RawMessage, acp
 	case result := <-ch:
 		return result, acp.ForwardAnswered
 	case <-time.After(s.cfg.HITLTimeout):
+		s.responsive.Store(false)
 		return nil, acp.ForwardTimeout
 	}
 }
@@ -382,6 +398,8 @@ func (s *Server) addViewer(v *viewer) bool {
 		return false
 	}
 	s.viewers[v] = struct{}{}
+	// A fresh attach is a sign of a human; resume forwarding asks.
+	s.responsive.Store(true)
 	return true
 }
 
@@ -430,6 +448,9 @@ func kpermAnswer(frame []byte) (string, json.RawMessage, bool) {
 }
 
 func (s *Server) resolvePermission(id string, result json.RawMessage) {
+	// Any kperm frame — even a late or error answer — proves a human is
+	// at the controls; resume forwarding asks.
+	s.responsive.Store(true)
 	if result == nil {
 		return
 	}

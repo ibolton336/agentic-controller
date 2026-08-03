@@ -38,6 +38,9 @@ const (
 	// RequestPermissionResponse result object, to relay verbatim.
 	ForwardAnswered
 	// ForwardTimeout: viewers were attached but none answered in time.
+	// The caller applies the same fail-closed deny as ForwardNoViewers;
+	// the forwarder additionally marks viewers unresponsive so follow-up
+	// asks resolve fast until a human shows signs of life again.
 	ForwardTimeout
 )
 
@@ -307,21 +310,12 @@ func (c *SessionClient) answerAgentRequest(msg *RPCResponse) {
 			}
 			return
 		case ForwardTimeout:
-			// A viewer was attached but walked away. Per the HITL design:
-			// answer allow_once, never cancelled/reject — goose reads a
-			// decline as retryable and the agent retries the tool call,
-			// burning MaxTurns with nobody watching. If the ask offers no
-			// allow_once option, fall through to the fail-closed deny.
-			for _, opt := range params.Options {
-				if opt.Kind == "allow_once" {
-					logging.Warn("permission for %q unanswered by viewer — allowing once", params.ToolCall.Title)
-					sel := map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": opt.OptionID}}
-					if err := c.ws.SendResponse(id, sel, nil); err != nil {
-						logging.Warn("reply to permission request: %v", err)
-					}
-					return
-				}
-			}
+			// A viewer was attached but nobody answered. Fail closed —
+			// an ask that self-approves on a timer is no ask at all. The
+			// forwarder marks viewers unresponsive after a timeout, so
+			// follow-up asks (goose retrying the declined tool) deny
+			// fast instead of waiting out the clock each time.
+			logging.Warn("permission for %q unanswered by viewer — denying (fail closed)", params.ToolCall.Title)
 		case ForwardNoViewers:
 			// fall through to the headless deny
 		}
