@@ -109,7 +109,7 @@ func (c *WSClient) readLoop() {
 			c.fanOutNotification(&resp, message)
 		case resp.IsAgentRequest():
 			c.dispatchAgentRequest(&resp)
-		case resp.ID != nil:
+		case resp.HasID():
 			c.routeResponse(&resp)
 		default:
 			logging.Warn("ACP frame with neither id nor method — dropping")
@@ -149,9 +149,8 @@ func (c *WSClient) dispatchAgentRequest(resp *RPCResponse) {
 	if handler == nil {
 		// No handler registered (bare WSClient use). Fail closed but
 		// always reply — an unanswered request parks goose forever.
-		id := *resp.ID
 		logging.Warn("agent request %q with no handler — rejecting", resp.Method)
-		if err := c.SendResponse(id, nil, &RPCError{Code: -32601, Message: "method not supported by harness"}); err != nil {
+		if err := c.SendResponse(resp.ID, nil, &RPCError{Code: -32601, Message: "method not supported by harness"}); err != nil {
 			logging.Warn("reply to %s: %v", resp.Method, err)
 		}
 		return
@@ -170,15 +169,23 @@ func (c *WSClient) dispatchAgentRequest(resp *RPCResponse) {
 }
 
 func (c *WSClient) routeResponse(resp *RPCResponse) {
+	id, numeric := resp.IntID()
+	if !numeric {
+		// Our outbound ids are always numeric; a string-id response
+		// answers a request we never sent.
+		logging.Warn("ACP response with non-numeric id %s — dropping (protocol error)", resp.ID)
+		return
+	}
+
 	c.mu.Lock()
-	ch, ok := c.pending[*resp.ID]
+	ch, ok := c.pending[id]
 	if ok {
-		delete(c.pending, *resp.ID)
+		delete(c.pending, id)
 	}
 	c.mu.Unlock()
 
 	if !ok {
-		logging.Warn("ACP response with unmatched id %d — dropping (protocol error)", *resp.ID)
+		logging.Warn("ACP response with unmatched id %d — dropping (protocol error)", id)
 		return
 	}
 	ch <- resp // cap 1, registered before send; never blocks
@@ -264,9 +271,10 @@ func (c *WSClient) Send(req *Request) error {
 	return c.conn.WriteMessage(websocket.TextMessage, data)
 }
 
-// SendResponse sends a JSON-RPC response for an agent-initiated request.
-// Exactly one of result and rpcErr should be set.
-func (c *WSClient) SendResponse(id int64, result any, rpcErr *RPCError) error {
+// SendResponse sends a JSON-RPC response for an agent-initiated request,
+// echoing the request's id bytes exactly (goose uses string ids for its
+// agent→client requests). Exactly one of result and rpcErr should be set.
+func (c *WSClient) SendResponse(id json.RawMessage, result any, rpcErr *RPCError) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 

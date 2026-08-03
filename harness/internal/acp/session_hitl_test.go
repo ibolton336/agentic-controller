@@ -136,3 +136,45 @@ func TestPermissionNoForwarderDenies(t *testing.T) {
 		t.Fatalf("headless deny expected, got %s/%s", kind, opt)
 	}
 }
+
+// Real goose allocates STRING ids for agent→client requests. The frame
+// must parse, be answered, and the reply must echo the string id exactly —
+// with *int64 ids this frame was dropped at unmarshal and goose parked the
+// turn forever (seen live on dylan-mta, 2026-08-03).
+func TestPermissionStringIDAnswered(t *testing.T) {
+	s := newDemuxServer(t)
+	c := s.dial(t)
+	sc := NewSessionClient(c)
+	_ = sc
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	promptDone := make(chan error, 1)
+	go func() {
+		_, err := sc.SendPrompt(ctx, "s1", []ContentBlock{{Type: "text", Text: "go"}}, 0)
+		promptDone <- err
+	}()
+
+	promptReq := s.next()
+	promptID := int64(promptReq["id"].(float64))
+
+	ask := `{"jsonrpc":"2.0","id":"e0fcae7c-perm-1","method":"session/request_permission","params":{` +
+		`"sessionId":"s1","toolCall":{"title":"shell · ls"},` +
+		`"options":[{"optionId":"opt-ro","kind":"reject_once"}]}}`
+	s.push(ask)
+	reply := s.next()
+
+	s.push(`{"jsonrpc":"2.0","id":` + jsonInt(promptID) + `,"result":{"stopReason":"end_turn"}}`)
+	if err := <-promptDone; err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+
+	if got, _ := reply["id"].(string); got != "e0fcae7c-perm-1" {
+		t.Fatalf("string id not echoed: %v", reply["id"])
+	}
+	kind, opt := selectedOption(t, reply)
+	if kind != "selected" || opt != "opt-ro" {
+		t.Fatalf("string-id ask not denied properly: %s/%s", kind, opt)
+	}
+}

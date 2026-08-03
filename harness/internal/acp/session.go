@@ -273,7 +273,7 @@ type PermissionOption struct {
 // tool and the turn continues) and reject everything else with
 // method-not-found (goose maps that to a cancelled/declined outcome too).
 func (c *SessionClient) answerAgentRequest(msg *RPCResponse) {
-	id := *msg.ID
+	id := msg.ID
 
 	if msg.Method != "session/request_permission" {
 		logging.Warn("agent request %q unsupported — rejecting (method not found)", msg.Method)
