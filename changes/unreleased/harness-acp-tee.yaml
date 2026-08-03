@@ -1,0 +1,6 @@
+kind: enhancement
+
+description: >
+  Harness fronts the pod ACP port with a tee: viewers get a verbatim pipe
+  to goose plus the run session's live update stream, and permission asks
+  are offered to attached viewers (HITL) before the headless deny.
