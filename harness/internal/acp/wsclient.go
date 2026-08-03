@@ -90,9 +90,10 @@ func (c *WSClient) Send(req *Request) error {
 	return c.conn.WriteMessage(websocket.TextMessage, data)
 }
 
-// SendResponse sends a JSON-RPC response for an agent-initiated request.
-// Exactly one of result and rpcErr should be set.
-func (c *WSClient) SendResponse(id int64, result any, rpcErr *RPCError) error {
+// SendResponse sends a JSON-RPC response for an agent-initiated request,
+// echoing the request's id bytes exactly (goose uses string ids for its
+// agent→client requests). Exactly one of result and rpcErr should be set.
+func (c *WSClient) SendResponse(id json.RawMessage, result any, rpcErr *RPCError) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -125,7 +126,7 @@ func (c *WSClient) Call(ctx context.Context, method string, params any) (json.Ra
 				notifications = append(notifications, msg)
 				continue
 			}
-			if msg.ID != nil && *msg.ID == req.ID {
+			if id, ok := msg.IntID(); ok && id == req.ID {
 				if msg.Error != nil {
 					return nil, notifications, fmt.Errorf("ACP error %d: %s", msg.Error.Code, msg.Error.Message)
 				}

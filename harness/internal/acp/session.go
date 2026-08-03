@@ -194,7 +194,7 @@ func (c *SessionClient) SendPrompt(ctx context.Context, sessionID string, conten
 				c.answerAgentRequest(msg)
 				continue
 			}
-			if msg.ID != nil && *msg.ID == req.ID {
+			if id, ok := msg.IntID(); ok && id == req.ID {
 				if msg.Error != nil {
 					return nil, fmt.Errorf("prompt error %d: %s", msg.Error.Code, msg.Error.Message)
 				}
@@ -228,7 +228,7 @@ type PermissionOption struct {
 // reject everything else with method-not-found (goose maps that to a
 // cancelled/declined outcome as well).
 func (c *SessionClient) answerAgentRequest(msg *RPCResponse) {
-	id := *msg.ID
+	id := msg.ID
 
 	if msg.Method != "session/request_permission" {
 		logging.Warn("agent request %q unsupported — rejecting (method not found)", msg.Method)
