@@ -20,6 +20,7 @@ import (
 	"github.com/konveyor/migration-harness/internal/hub"
 	"github.com/konveyor/migration-harness/internal/logging"
 	"github.com/konveyor/migration-harness/internal/prompt"
+	"github.com/konveyor/migration-harness/internal/tee"
 	"github.com/konveyor/migration-harness/internal/watcher"
 )
 
@@ -132,9 +133,15 @@ func runStage(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// 5. Start goose serve
+	// 5. Start goose serve. With the ACP tee (default) goose binds
+	// loopback on :4001 and the harness owns the pod's :4000 endpoint;
+	// with HARNESS_ACP_TEE=off goose takes :4000 itself as before.
 	logging.Header("Goose Setup")
-	srv, err := goose.StartServe(ctx, 0, cfg.ACPSecretKey, cfg.Provider, cfg.Model, cfg.APIKey, cfg.Endpoint)
+	goosePort := 0
+	if cfg.ACPTee {
+		goosePort = goose.LoopbackACPPort
+	}
+	srv, err := goose.StartServe(ctx, goosePort, cfg.ACPTee, cfg.ACPSecretKey, cfg.Provider, cfg.Model, cfg.APIKey, cfg.Endpoint)
 	if err != nil {
 		return fmt.Errorf("start goose serve: %w", err)
 	}
@@ -151,6 +158,26 @@ func runStage(cmd *cobra.Command, args []string) error {
 	sessionID, err := session.CreateSession(ctx, cloneDir, nil)
 	if err != nil {
 		return fmt.Errorf("create session: %w", err)
+	}
+
+	// 6b. Expose the run: tee listener on the pod ACP port. Viewers get
+	// a verbatim pipe to goose plus the run session's live stream, and
+	// permission asks are offered to whoever is watching. Failure here
+	// never fails the run — it only loses live viewers.
+	if cfg.ACPTee {
+		teeSrv := tee.New(tee.Config{
+			SecretKey:    cfg.ACPSecretKey,
+			UpstreamAddr: fmt.Sprintf("127.0.0.1:%d", srv.Port()),
+			HITLTimeout:  cfg.HITLTimeout,
+		})
+		if err := teeSrv.Start(goose.DefaultACPPort); err != nil {
+			logging.Warn("ACP tee: %v — run continues without live viewers", err)
+		} else {
+			defer teeSrv.Stop()
+			teeSrv.AttachRun(wsClient)
+			session.SetPermissionForwarder(teeSrv)
+			logging.Ok("ACP tee on :%d (goose loopback :%d)", goose.DefaultACPPort, srv.Port())
+		}
 	}
 
 	// 7. Build prompt from context layers

@@ -24,10 +24,17 @@ type ServeProcess struct {
 }
 
 const (
-	// DefaultACPPort is the standard port for goose serve in the Agentic
-	// Platform. The controller and UI connect to this port for observability
-	// and human-in-the-loop interaction.
+	// DefaultACPPort is the standard port for the pod's ACP endpoint in
+	// the Agentic Platform. The controller and UI connect to this port
+	// for observability and human-in-the-loop interaction. With the ACP
+	// tee enabled (the default) the harness owns this port and goose
+	// serves on LoopbackACPPort behind it.
 	DefaultACPPort = 4000
+
+	// LoopbackACPPort is where goose serve binds when the harness tee
+	// fronts it on DefaultACPPort. Loopback-only by construction: the
+	// pod's external ACP surface is the tee.
+	LoopbackACPPort = 4001
 )
 
 // StartServe launches goose serve on the given port with authentication.
@@ -36,12 +43,15 @@ const (
 // and endpoint are translated to provider-specific env vars so goose
 // serve knows how to authenticate with the LLM.
 //
-// Bind address follows authentication: with a secret key the server binds
-// all interfaces — in a Sandbox the platform attaches to <pod>:4000 through
-// the run's headless Service, which goose's default loopback bind would
-// refuse. Without a key (bare CLI use) it stays loopback-only; an
-// unauthenticated ACP server must never be reachable off-host.
-func StartServe(ctx context.Context, port int, secretKey, provider, model, apiKey, endpoint string) (*ServeProcess, error) {
+// With bindLoopback the server stays on 127.0.0.1 regardless of key —
+// used when the harness ACP tee is the pod's external endpoint and goose
+// must not be reachable off-host directly. Otherwise bind address follows
+// authentication: with a secret key the server binds all interfaces — in
+// a Sandbox the platform attaches to <pod>:4000 through the run's
+// headless Service, which goose's default loopback bind would refuse.
+// Without a key (bare CLI use) it stays loopback-only; an unauthenticated
+// ACP server must never be reachable off-host.
+func StartServe(ctx context.Context, port int, bindLoopback bool, secretKey, provider, model, apiKey, endpoint string) (*ServeProcess, error) {
 	goosePath, err := exec.LookPath("goose")
 	if err != nil {
 		return nil, fmt.Errorf("goose not found: %w", err)
@@ -52,7 +62,7 @@ func StartServe(ctx context.Context, port int, secretKey, provider, model, apiKe
 	}
 
 	host := "127.0.0.1"
-	if secretKey != "" {
+	if secretKey != "" && !bindLoopback {
 		host = "0.0.0.0"
 	}
 
