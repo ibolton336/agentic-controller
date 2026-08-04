@@ -98,6 +98,11 @@ const (
 	// extends on pong, and a silent peer times the read loop out.
 	pingInterval = 30 * time.Second
 	pongWait     = 90 * time.Second
+
+	// shutdownFlushTimeout bounds how long Stop waits for viewers to
+	// drain their queued frames. It runs at process exit, well inside the
+	// pod's termination grace period.
+	shutdownFlushTimeout = 2 * time.Second
 )
 
 // Config for the tee server. SecretKey and UpstreamAddr are required.
@@ -236,6 +241,26 @@ func (s *Server) Stop() {
 	if s.httpSrv != nil {
 		s.httpSrv.Close()
 	}
+
+	// Graceful close: let each writer drain what is already queued before
+	// the socket goes away. stopped is set above, so nothing new can be
+	// enqueued and every writer terminates. Bounded in total — a viewer
+	// that cannot drain in time is dropped, exactly as before.
+	for _, v := range views {
+		v.beginFinish()
+	}
+	deadline := time.After(shutdownFlushTimeout)
+	for _, v := range views {
+		if v.flushed == nil {
+			continue
+		}
+		select {
+		case <-v.flushed:
+		case <-deadline:
+			logging.Warn("tee: viewer did not drain before shutdown — closing anyway")
+		}
+	}
+
 	for _, v := range views {
 		v.shutdown(websocket.CloseGoingAway, "harness shutting down")
 	}
@@ -397,10 +422,26 @@ type outFrame struct {
 }
 
 type viewer struct {
-	conn     *websocket.Conn
-	out      chan outFrame
-	closed   chan struct{}
-	stopOnce sync.Once
+	conn   *websocket.Conn
+	out    chan outFrame
+	closed chan struct{}
+	// finish asks the writer to drain everything already queued and then
+	// stop, instead of dropping it. flushed is closed by the writer when
+	// it has done so (or given up).
+	finish     chan struct{}
+	flushed    chan struct{}
+	stopOnce   sync.Once
+	finishOnce sync.Once
+}
+
+// beginFinish starts a graceful close: no more frames will be queued, so
+// the writer drains what is left. Safe to call repeatedly.
+func (v *viewer) beginFinish() {
+	v.finishOnce.Do(func() {
+		if v.finish != nil {
+			close(v.finish)
+		}
+	})
 }
 
 // enqueue queues a frame for the viewer's writer goroutine. On a full
@@ -468,9 +509,11 @@ func (s *Server) serveViewer(client *websocket.Conn) {
 	defer recoverWarn("tee viewer")
 
 	v := &viewer{
-		conn:   client,
-		out:    make(chan outFrame, s.cfg.QueueCap),
-		closed: make(chan struct{}),
+		conn:    client,
+		out:     make(chan outFrame, s.cfg.QueueCap),
+		closed:  make(chan struct{}),
+		finish:  make(chan struct{}),
+		flushed: make(chan struct{}),
 	}
 
 	// Catch-up before registration: replay the harness's own status
@@ -513,12 +556,36 @@ func (s *Server) serveViewer(client *websocket.Conn) {
 	// teed frames are serialized through v.out.
 	go func() {
 		defer recoverWarn("tee viewer writer")
+		defer close(v.flushed)
 		ping := time.NewTicker(pingInterval)
 		defer ping.Stop()
+		write := func(f outFrame) bool {
+			if err := client.WriteMessage(f.messageType, f.data); err != nil {
+				v.shutdown(websocket.CloseInternalServerErr, "write failed")
+				return false
+			}
+			return true
+		}
 		for {
 			select {
 			case <-v.closed:
 				return
+			case <-v.finish:
+				// The run's terminal frames — final push status, the
+				// finished plan ladder, the outcome notice — are queued
+				// microseconds before the harness exits. Drain them, or
+				// the viewer is left staring at an in_progress tool call
+				// with no way to tell a finished run from a hung one.
+				for {
+					select {
+					case f := <-v.out:
+						if !write(f) {
+							return
+						}
+					default:
+						return
+					}
+				}
 			case <-ping.C:
 				deadline := time.Now().Add(5 * time.Second)
 				if err := client.WriteControl(websocket.PingMessage, nil, deadline); err != nil {
@@ -526,8 +593,7 @@ func (s *Server) serveViewer(client *websocket.Conn) {
 					return
 				}
 			case f := <-v.out:
-				if err := client.WriteMessage(f.messageType, f.data); err != nil {
-					v.shutdown(websocket.CloseInternalServerErr, "write failed")
+				if !write(f) {
 					return
 				}
 			}

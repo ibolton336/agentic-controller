@@ -798,3 +798,45 @@ func TestSlowViewerDropped(t *testing.T) {
 	// Further enqueues are no-ops, not panics.
 	v.enqueue(outFrame{websocket.TextMessage, []byte("4")})
 }
+
+// The run's terminal frames (final push completed, the finished plan
+// ladder, the outcome notice) are emitted microseconds before the
+// harness returns and Stop() fires. They must still reach the viewer:
+// dropping them leaves the UI showing "git push (final) — in_progress"
+// forever, with no way to tell a finished run from a hung one.
+func TestTerminalFramesSurviveStop(t *testing.T) {
+	_, _, s := startTee(t, Config{})
+
+	v, err := dialViewer(t, s, testKey)
+	if err != nil {
+		t.Fatalf("viewer dial: %v", err)
+	}
+
+	// Emit the exact tail of a real run, then stop immediately — no
+	// sleep, mirroring `defer teeSrv.Stop()` firing right after.
+	s.EmitRunUpdate(map[string]any{
+		"sessionUpdate": "tool_call_update", "toolCallId": "harness-push-1", "status": "completed",
+	})
+	s.EmitRunNotice("stage succeeded — results pushed to branch konveyor/x")
+	s.Stop()
+
+	var sawCompleted, sawOutcome bool
+	deadline := time.After(5 * time.Second)
+	for !(sawCompleted && sawOutcome) {
+		select {
+		case f, ok := <-v.recv:
+			if !ok {
+				t.Fatalf("socket closed before terminal frames arrived (completed=%v outcome=%v)",
+					sawCompleted, sawOutcome)
+			}
+			if strings.Contains(f, "harness-push-1") && strings.Contains(f, `"status":"completed"`) {
+				sawCompleted = true
+			}
+			if strings.Contains(f, "stage succeeded") {
+				sawOutcome = true
+			}
+		case <-deadline:
+			t.Fatalf("terminal frames lost on Stop (completed=%v outcome=%v)", sawCompleted, sawOutcome)
+		}
+	}
+}
