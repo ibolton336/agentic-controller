@@ -238,10 +238,27 @@ func TestInitializeDeclaresGooseCustomNotifications(t *testing.T) {
 		_ = json.Unmarshal(data, &req)
 		requests <- req
 
-		id := int64(req["id"].(float64))
-		resp := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"protocolVersion":1,"agentCapabilities":{}}}`, id)
+		rawID, ok := req["id"].(float64)
+		if !ok {
+			t.Errorf("initialize request carried no numeric id: %v", req)
+			return
+		}
+		resp := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"protocolVersion":1,"agentCapabilities":{}}}`, int64(rawID))
 		if err := conn.WriteMessage(websocket.TextMessage, []byte(resp)); err != nil {
 			t.Errorf("send initialize result: %v", err)
+			return
+		}
+
+		// Hold the connection open until the client hangs up. Returning
+		// here would close the socket with the response still in flight,
+		// and a close on a socket with unread data can RST — discarding
+		// the response, which the client reports as "websocket connection
+		// closed". Loopback usually wins that race; a loaded CI runner
+		// does not.
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
 		}
 	}))
 	defer srv.Close()
