@@ -10,6 +10,9 @@ import (
 
 const (
 	DefaultMaxTurns = 200
+
+	// MaxHITLTimeoutSeconds caps HARNESS_HITL_TIMEOUT_SECONDS (10 min).
+	MaxHITLTimeoutSeconds = 600
 )
 
 type Config struct {
@@ -96,6 +99,12 @@ func LoadFromEnv() (*Config, error) {
 	cfg.ACPTee = !envSwitchedOff("HARNESS_ACP_TEE")
 	cfg.HITLSteer = !envSwitchedOff("HARNESS_HITL_STEER")
 	if n, err := strconv.Atoi(os.Getenv("HARNESS_HITL_TIMEOUT_SECONDS")); err == nil && n > 0 {
+		// Ceiling: a single ask parking the run for hours isn't HITL,
+		// it's abandonment — the pod deadline should not be spent inside
+		// one unanswered dialog.
+		if n > MaxHITLTimeoutSeconds {
+			n = MaxHITLTimeoutSeconds
+		}
 		cfg.HITLTimeout = time.Duration(n) * time.Second
 	}
 

@@ -24,15 +24,19 @@ type fakeGoose struct {
 	t   *testing.T
 	srv *httptest.Server
 
-	mu    sync.Mutex
-	conns []*websocket.Conn
-	seen  map[int][]string // 1-based conn index -> frames received
+	mu          sync.Mutex
+	conns       []*websocket.Conn
+	seen        map[int][]string // 1-based conn index -> frames received
+	dialHeaders []string         // X-Secret-Key header per accepted dial
 }
 
 func newFakeGoose(t *testing.T) *fakeGoose {
 	g := &fakeGoose{t: t, seen: make(map[int][]string)}
 	upgrader := websocket.Upgrader{}
 	g.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		g.mu.Lock()
+		g.dialHeaders = append(g.dialHeaders, r.Header.Get("X-Secret-Key"))
+		g.mu.Unlock()
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			return
@@ -668,6 +672,105 @@ func TestHarnessStatusEmitAndReplay(t *testing.T) {
 		"title": "git push (final)", "kind": "execute", "status": "in_progress",
 	})
 	v.expect("live tool_call", func(f string) bool { return strings.Contains(f, "harness-push-1") })
+}
+
+func TestUpstreamDialCarriesHeaderNotURL(t *testing.T) {
+	g, _, s := startTee(t, Config{})
+
+	if _, err := dialViewer(t, s, testKey); err != nil {
+		t.Fatalf("viewer dial: %v", err)
+	}
+
+	// The viewer's upstream dial (2nd accepted conn) must authenticate
+	// via the X-Secret-Key header — never a ?token= URL parameter that a
+	// dial error could echo into logs.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		g.mu.Lock()
+		n := len(g.dialHeaders)
+		var hdr string
+		if n >= 2 {
+			hdr = g.dialHeaders[1]
+		}
+		g.mu.Unlock()
+		if n >= 2 {
+			if hdr != testKey {
+				t.Fatalf("upstream dial missing X-Secret-Key header (got %q)", hdr)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("viewer upstream dial never reached fake goose")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if strings.Contains(s.upstream, "token=") {
+		t.Fatalf("upstream URL still carries the key: %s", s.upstream)
+	}
+}
+
+func TestEmptySecretKeyRejectsEverything(t *testing.T) {
+	s := New(Config{UpstreamAddr: "127.0.0.1:1"})
+	if err := s.Start(0); err != nil {
+		t.Fatalf("start tee: %v", err)
+	}
+	t.Cleanup(s.Stop)
+
+	// No configured key must mean nothing attaches — including clients
+	// presenting empty or non-empty credentials.
+	for _, token := range []string{"", "anything"} {
+		u := fmt.Sprintf("ws://%s/acp?token=%s", s.Addr(), url.QueryEscape(token))
+		if conn, _, err := websocket.DefaultDialer.Dial(u, nil); err == nil {
+			conn.Close()
+			t.Fatalf("empty-key server accepted token %q", token)
+		}
+	}
+	h := http.Header{}
+	h.Set("X-Secret-Key", "")
+	if conn, _, err := websocket.DefaultDialer.Dial(fmt.Sprintf("ws://%s/acp", s.Addr()), h); err == nil {
+		conn.Close()
+		t.Fatal("empty-key server accepted empty header")
+	}
+}
+
+func TestForwardPermissionUnblocksOnStop(t *testing.T) {
+	_, _, s := startTee(t, Config{HITLTimeout: time.Hour})
+
+	if _, err := dialViewer(t, s, testKey); err != nil {
+		t.Fatalf("viewer dial: %v", err)
+	}
+
+	// An ask parked on a viewer answer must fail closed the moment the
+	// tee shuts down — not after its (here: one hour) timeout.
+	done := make(chan acp.PermissionForwardOutcome, 1)
+	go func() {
+		_, outcome := s.ForwardPermission(json.RawMessage(`{"toolCall":{"title":"x"},"options":[]}`))
+		done <- outcome
+	}()
+	// Wait until the ask is registered before stopping.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s.mu.Lock()
+		n := len(s.perms)
+		s.mu.Unlock()
+		if n == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("ask never registered")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	s.Stop()
+
+	select {
+	case outcome := <-done:
+		if outcome != acp.ForwardNoViewers {
+			t.Fatalf("expected fail-closed NoViewers on shutdown, got %v", outcome)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ForwardPermission still parked after Stop")
+	}
 }
 
 // The drop policy is a unit property of viewer.enqueue: a full queue

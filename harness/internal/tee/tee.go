@@ -46,7 +46,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/url"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -131,6 +131,12 @@ type Server struct {
 	perms   map[string]chan json.RawMessage
 	stopped bool
 
+	// done is closed by Stop so anything parked on a viewer answer
+	// (ForwardPermission) fails closed immediately instead of waiting
+	// out its timeout during shutdown.
+	done     chan struct{}
+	stopOnce sync.Once
+
 	// responsive tracks whether attached viewers show signs of a human:
 	// set on attach and on any kperm answer, cleared when an ask times
 	// out. While false, permission asks resolve NoViewers immediately —
@@ -165,10 +171,14 @@ func New(cfg Config) *Server {
 		cfg.QueueCap = DefaultQueueCap
 	}
 	return &Server{
-		cfg:      cfg,
-		upstream: fmt.Sprintf("ws://%s/acp?token=%s", cfg.UpstreamAddr, url.QueryEscape(cfg.SecretKey)),
+		cfg: cfg,
+		// No credential in the URL: the key rides the X-Secret-Key
+		// header on dial, so an error that echoes the URL cannot leak it
+		// into container logs.
+		upstream: fmt.Sprintf("ws://%s/acp", cfg.UpstreamAddr),
 		viewers:  make(map[*viewer]struct{}),
 		perms:    make(map[string]chan json.RawMessage),
+		done:     make(chan struct{}),
 	}
 }
 
@@ -209,8 +219,9 @@ func (s *Server) Addr() string {
 }
 
 // Stop closes the listener and disconnects all viewers. Pending
-// permission asks resolve through their timeout fallback.
+// permission asks fail closed immediately via the done channel.
 func (s *Server) Stop() {
+	s.stopOnce.Do(func() { close(s.done) })
 	s.mu.Lock()
 	s.stopped = true
 	views := make([]*viewer, 0, len(s.viewers))
@@ -363,10 +374,16 @@ func (s *Server) ForwardPermission(params json.RawMessage) (json.RawMessage, acp
 	}()
 
 	logging.Info("tee: permission ask %s offered to %d viewer(s)", id, n)
+	// Explicit timer, not time.After: an answered ask must release its
+	// timer immediately rather than pinning it for the full window.
+	timer := time.NewTimer(s.cfg.HITLTimeout)
+	defer timer.Stop()
 	select {
 	case result := <-ch:
 		return result, acp.ForwardAnswered
-	case <-time.After(s.cfg.HITLTimeout):
+	case <-s.done:
+		return nil, acp.ForwardNoViewers
+	case <-timer.C:
 		s.responsive.Store(false)
 		return nil, acp.ForwardTimeout
 	}
@@ -418,6 +435,12 @@ var upgrader = websocket.Upgrader{
 }
 
 func (s *Server) authorized(r *http.Request) bool {
+	// Defense in depth: with no key configured nothing may attach. (The
+	// carrier guards below already refuse empty credentials, so an empty
+	// key could never match anyway — this makes the invariant explicit.)
+	if s.cfg.SecretKey == "" {
+		return false
+	}
 	key := []byte(s.cfg.SecretKey)
 	if h := r.Header.Get("X-Secret-Key"); h != "" {
 		return subtle.ConstantTimeCompare([]byte(h), key) == 1
@@ -513,10 +536,13 @@ func (s *Server) serveViewer(client *websocket.Conn) {
 
 	// Every client gets its own upstream goose connection — goose's
 	// per-connection agent keeps interactive chat isolated, exactly as
-	// when goose owned the port.
-	upstream, _, err := websocket.DefaultDialer.Dial(s.upstream, nil)
+	// when goose owned the port. The key travels as a header, never in
+	// the URL, so dial errors cannot leak it.
+	hdr := http.Header{}
+	hdr.Set("X-Secret-Key", s.cfg.SecretKey)
+	upstream, _, err := websocket.DefaultDialer.Dial(s.upstream, hdr)
 	if err != nil {
-		logging.Warn("tee: upstream dial: %v", err)
+		logging.Warn("tee: upstream dial to %s: %v", s.cfg.UpstreamAddr, err)
 		v.shutdown(websocket.CloseInternalServerErr, "agent unavailable")
 		return
 	}
@@ -760,6 +786,6 @@ func (s *Server) resolvePermission(id string, result json.RawMessage) {
 
 func recoverWarn(what string) {
 	if r := recover(); r != nil {
-		logging.Warn("tee: %s panic: %v", what, r)
+		logging.Warn("tee: %s panic: %v\n%s", what, r, debug.Stack())
 	}
 }
