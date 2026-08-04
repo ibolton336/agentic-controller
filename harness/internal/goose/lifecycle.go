@@ -37,13 +37,11 @@ const (
 	LoopbackACPPort = 4001
 )
 
-// StartServe launches goose serve on the given port with authentication.
-// If port is 0, DefaultACPPort (4000) is used. secretKey is the ACP
-// authentication key (from config.Config.ACPSecretKey). Provider, apiKey,
-// and endpoint are translated to provider-specific env vars so goose
-// serve knows how to authenticate with the LLM.
+// StartServe launches goose serve per cfg. Takes a struct rather than a
+// positional list: the parameters are a clump of same-typed strings, and
+// a miscount is silent at compile time.
 //
-// With bindLoopback the server stays on 127.0.0.1 regardless of key —
+// With cfg.BindLoopback the server stays on 127.0.0.1 regardless of key —
 // used when the harness ACP tee is the pod's external endpoint and goose
 // must not be reachable off-host directly. Otherwise bind address follows
 // authentication: with a secret key the server binds all interfaces — in
@@ -51,7 +49,28 @@ const (
 // headless Service, which goose's default loopback bind would refuse.
 // Without a key (bare CLI use) it stays loopback-only; an unauthenticated
 // ACP server must never be reachable off-host.
-func StartServe(ctx context.Context, port int, bindLoopback bool, secretKey, provider, model, apiKey, endpoint string) (*ServeProcess, error) {
+// ServeConfig configures StartServe. The zero value is a bare,
+// unauthenticated loopback server on DefaultACPPort — enough for CLI use
+// and tests; a Sandbox sets SecretKey and the model fields.
+type ServeConfig struct {
+	// Port to listen on; 0 means DefaultACPPort.
+	Port int
+	// BindLoopback keeps goose on 127.0.0.1 even with a SecretKey set —
+	// the harness ACP tee is then the pod's external endpoint.
+	BindLoopback bool
+	// SecretKey is the ACP authentication key (config.Config.ACPSecretKey).
+	SecretKey string
+	// Provider, Model, APIKey and Endpoint are translated to the
+	// provider-specific env vars goose expects.
+	Provider string
+	Model    string
+	APIKey   string
+	Endpoint string
+}
+
+func StartServe(ctx context.Context, cfg ServeConfig) (*ServeProcess, error) {
+	port, bindLoopback, secretKey := cfg.Port, cfg.BindLoopback, cfg.SecretKey
+	provider, model, apiKey, endpoint := cfg.Provider, cfg.Model, cfg.APIKey, cfg.Endpoint
 	goosePath, err := exec.LookPath("goose")
 	if err != nil {
 		return nil, fmt.Errorf("goose not found: %w", err)

@@ -164,7 +164,15 @@ func runStage(cmd *cobra.Command, args []string) error {
 	if cfg.ACPTee {
 		goosePort = goose.LoopbackACPPort
 	}
-	srv, err := goose.StartServe(ctx, goosePort, cfg.ACPTee, cfg.ACPSecretKey, cfg.Provider, cfg.Model, cfg.APIKey, cfg.Endpoint)
+	srv, err := goose.StartServe(ctx, goose.ServeConfig{
+		Port:         goosePort,
+		BindLoopback: cfg.ACPTee,
+		SecretKey:    cfg.ACPSecretKey,
+		Provider:     cfg.Provider,
+		Model:        cfg.Model,
+		APIKey:       cfg.APIKey,
+		Endpoint:     cfg.Endpoint,
+	})
 	if err != nil {
 		return fmt.Errorf("start goose serve: %w", err)
 	}

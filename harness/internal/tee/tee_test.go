@@ -840,3 +840,42 @@ func TestTerminalFramesSurviveStop(t *testing.T) {
 		}
 	}
 }
+
+// Stop's flush wait must stay bounded in TOTAL, however many viewers are
+// attached. A single shared time.After channel delivers exactly once, so
+// reusing it across viewers left every wait after the first with no
+// deadline — one stalled viewer then held the harness open until the pod
+// grace period expired.
+func TestStopStaysBoundedWithStalledViewers(t *testing.T) {
+	_, _, s := startTee(t, Config{})
+
+	// Two viewers whose writers never signal flushed — the shape of a
+	// socket stalled inside WriteMessage.
+	stalled := make([]*viewer, 0, 2)
+	for i := 0; i < 2; i++ {
+		v := &viewer{
+			out:     make(chan outFrame, 1),
+			closed:  make(chan struct{}),
+			finish:  make(chan struct{}),
+			flushed: make(chan struct{}), // deliberately never closed
+		}
+		stalled = append(stalled, v)
+		s.mu.Lock()
+		s.viewers[v] = struct{}{}
+		s.mu.Unlock()
+	}
+
+	done := make(chan struct{})
+	go func() { s.Stop(); close(done) }()
+
+	select {
+	case <-done:
+	case <-time.After(shutdownFlushTimeout + 5*time.Second):
+		t.Fatal("Stop exceeded its flush budget — a later viewer waited with no deadline")
+	}
+
+	// Let the deferred cleanup Stop return immediately.
+	for _, v := range stalled {
+		close(v.flushed)
+	}
+}

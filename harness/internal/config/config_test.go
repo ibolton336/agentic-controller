@@ -27,6 +27,9 @@ func clearKonveyorEnv(t *testing.T) {
 		"KONVEYOR_WORKFLOW_STAGE",
 		"KONVEYOR_WORKFLOW_STAGE_COUNT",
 		"HUB_TOKEN_ID",
+		"HARNESS_ACP_TEE",
+		"HARNESS_HITL_STEER",
+		"HARNESS_HITL_TIMEOUT_SECONDS",
 	} {
 		t.Setenv(k, "")
 		os.Unsetenv(k)

@@ -8,5 +8,5 @@ description: >
   outcome), can redirect the active turn via
   _goose/unstable/session/steer or stop it via session/cancel (relayed
   onto the run connection; HARNESS_HITL_STEER=off for watch-only), and
-  are offered permission asks (HITL) before the headless fail-closed
-  deny.
+  are offered permission asks (HITL) when responsive viewers are
+  attached; every other path fails closed, including on timeout.

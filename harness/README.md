@@ -74,7 +74,7 @@ All configuration is via environment variables — there is no config file or `i
 | `KONVEYOR_INSTRUCTIONS` | — | Stage-specific task instructions |
 | `HARNESS_ACP_TEE` | `on` | `off` disables the ACP tee; goose then owns :4000 directly |
 | `HARNESS_HITL_STEER` | `on` | `off` makes the run stream watch-only: viewer steer/cancel frames for the run session are refused instead of relayed |
-| `HARNESS_HITL_TIMEOUT_SECONDS` | `180` | How long a permission ask waits for an attached viewer |
+| `HARNESS_HITL_TIMEOUT_SECONDS` | `180` | How long a permission ask waits for an attached viewer; values above 600 are clamped to 600 |
 
 ---
 
@@ -125,7 +125,7 @@ cross-connection fan-out, so a client dialing the pod could never see the
 run's live session. The harness therefore owns the pod ACP port and
 fronts goose:
 
-```
+```text
 viewer ──(hub WS proxy)──▶ pod:4000 = harness tee ──▶ 127.0.0.1:4001 = goose serve
                                        ▲
                         harness's own run connection (session, prompt)

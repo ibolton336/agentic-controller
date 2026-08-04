@@ -41,7 +41,11 @@ func TestSteerRedirectsLiveRun(t *testing.T) {
 	defer cancel()
 
 	// goose loopback behind the tee, exactly as in the pod.
-	srv, err := goose.StartServe(ctx, goose.LoopbackACPPort, true, "steer-probe-key", "", "", "", "")
+	srv, err := goose.StartServe(ctx, goose.ServeConfig{
+		Port:         goose.LoopbackACPPort,
+		BindLoopback: true,
+		SecretKey:    "steer-probe-key",
+	})
 	if err != nil {
 		t.Fatalf("StartServe: %v", err)
 	}

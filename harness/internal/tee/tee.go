@@ -249,16 +249,22 @@ func (s *Server) Stop() {
 	for _, v := range views {
 		v.beginFinish()
 	}
-	deadline := time.After(shutdownFlushTimeout)
+	// Absolute expiry with a fresh timer per viewer: a single time.After
+	// channel delivers exactly once, so reusing it would leave every wait
+	// after the first with no deadline at all. An already-expired timer
+	// fires immediately, keeping the TOTAL wait bounded.
+	expiry := time.Now().Add(shutdownFlushTimeout)
 	for _, v := range views {
 		if v.flushed == nil {
 			continue
 		}
+		t := time.NewTimer(time.Until(expiry))
 		select {
 		case <-v.flushed:
-		case <-deadline:
+		case <-t.C:
 			logging.Warn("tee: viewer did not drain before shutdown — closing anyway")
 		}
+		t.Stop()
 	}
 
 	for _, v := range views {
@@ -379,14 +385,9 @@ func (s *Server) ForwardPermission(params json.RawMessage) (json.RawMessage, acp
 		return nil, acp.ForwardNoViewers
 	}
 	s.perms[id] = ch
-	// Snapshot under the lock, enqueue outside it: enqueue's drop path
-	// shuts the viewer down (a 2s WriteControl) and must not stall the
-	// tee — a removed viewer's enqueue is a no-op via v.closed.
-	targets := make([]*viewer, 0, len(s.viewers))
-	for v := range s.viewers {
-		targets = append(targets, v)
-	}
 	s.mu.Unlock()
+
+	targets := s.snapshotViewers()
 	for _, v := range targets {
 		v.enqueue(outFrame{websocket.TextMessage, frame})
 	}
@@ -576,6 +577,11 @@ func (s *Server) serveViewer(client *websocket.Conn) {
 				// microseconds before the harness exits. Drain them, or
 				// the viewer is left staring at an in_progress tool call
 				// with no way to tell a finished run from a hung one.
+				//
+				// Bound the drain itself: WriteMessage has no deadline of
+				// its own, so a stalled socket would otherwise keep this
+				// goroutine (and the flushed signal) alive indefinitely.
+				_ = client.SetWriteDeadline(time.Now().Add(shutdownFlushTimeout))
 				for {
 					select {
 					case f := <-v.out:
@@ -787,15 +793,22 @@ func (s *Server) removeViewer(v *viewer) {
 	s.mu.Unlock()
 }
 
-func (s *Server) broadcast(frame []byte) {
-	// Snapshot under the lock, enqueue outside it — see ForwardPermission.
+// snapshotViewers copies the attached set under the lock. Callers enqueue
+// outside it: enqueue's drop path shuts the viewer down (a WriteControl
+// with a deadline) and must never run while the tee's mutex is held. A
+// viewer removed in between is harmless — its enqueue is a no-op.
+func (s *Server) snapshotViewers() []*viewer {
 	s.mu.Lock()
-	targets := make([]*viewer, 0, len(s.viewers))
+	defer s.mu.Unlock()
+	out := make([]*viewer, 0, len(s.viewers))
 	for v := range s.viewers {
-		targets = append(targets, v)
+		out = append(out, v)
 	}
-	s.mu.Unlock()
-	for _, v := range targets {
+	return out
+}
+
+func (s *Server) broadcast(frame []byte) {
+	for _, v := range s.snapshotViewers() {
 		v.enqueue(outFrame{websocket.TextMessage, frame})
 	}
 }
