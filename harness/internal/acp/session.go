@@ -199,6 +199,12 @@ func (c *SessionClient) SendPrompt(ctx context.Context, sessionID string, conten
 				return result, fmt.Errorf("max turns reached (%d)", maxTurns)
 			}
 		case msg := <-respCh:
+			// Notifications buffered before the response still belong to
+			// this turn — drain them so a trailing chunk is not lost when
+			// select picks respCh first (mirrors WSClient.Call).
+			for _, n := range drainNotifications(notifCh) {
+				handlePromptNotification(n, result)
+			}
 			if msg.Error != nil {
 				return nil, fmt.Errorf("prompt error %d: %s", msg.Error.Code, msg.Error.Message)
 			}

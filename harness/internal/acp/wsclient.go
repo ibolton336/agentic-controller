@@ -162,6 +162,11 @@ func (c *WSClient) dispatchAgentRequest(resp *RPCResponse) {
 		defer func() {
 			if r := recover(); r != nil {
 				logging.Warn("agent request handler panic: %v", r)
+				// The request must still be answered — goose parks the
+				// turn on the reply with no timeout.
+				if err := c.SendResponse(resp.ID, nil, &RPCError{Code: -32603, Message: "internal error in harness handler"}); err != nil {
+					logging.Warn("reply to %s after panic: %v", resp.Method, err)
+				}
 			}
 		}()
 		handler(resp)

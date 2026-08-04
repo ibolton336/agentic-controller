@@ -198,3 +198,26 @@ func TestRawSubscriptionSeesWireBytes(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 }
+
+// TestPanickingHandlerStillReplies proves the recover branch upholds the
+// always-answer invariant: goose parks the turn on the reply with no
+// timeout, so a handler panic must still produce an error response.
+func TestPanickingHandlerStillReplies(t *testing.T) {
+	s := newDemuxServer(t)
+	c := s.dial(t)
+	c.SetAgentRequestHandler(func(*RPCResponse) { panic("handler boom") })
+
+	s.push(`{"jsonrpc":"2.0","id":"perm-1","method":"session/request_permission","params":{}}`)
+
+	reply := s.next()
+	if got := reply["id"]; got != "perm-1" {
+		t.Fatalf("reply id %v, want perm-1", got)
+	}
+	errObj, ok := reply["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected an error reply, got %v", reply)
+	}
+	if code := errObj["code"].(float64); code != -32603 {
+		t.Fatalf("error code %v, want -32603", code)
+	}
+}
