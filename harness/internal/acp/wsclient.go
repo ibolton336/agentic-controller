@@ -263,6 +263,23 @@ func (c *WSClient) SetAgentRequestHandler(fn func(*RPCResponse)) {
 	c.mu.Unlock()
 }
 
+// Notify sends a JSON-RPC notification (no id, no response expected).
+func (c *WSClient) Notify(method string, params any) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
+	data, err := json.Marshal(&struct {
+		JSONRPC string `json:"jsonrpc"`
+		Method  string `json:"method"`
+		Params  any    `json:"params,omitempty"`
+	}{JSONRPC: "2.0", Method: method, Params: params})
+	if err != nil {
+		return fmt.Errorf("marshal notification: %w", err)
+	}
+
+	return c.conn.WriteMessage(websocket.TextMessage, data)
+}
+
 // Send sends a JSON-RPC request over the WebSocket.
 func (c *WSClient) Send(req *Request) error {
 	c.writeMu.Lock()
@@ -324,6 +341,30 @@ func (c *WSClient) Call(ctx context.Context, method string, params any) (json.Ra
 			}
 			return msg.Result, notifications, nil
 		}
+	}
+}
+
+// CallRPC sends a request and waits for the matching response, returning
+// the agent's error object intact instead of flattening it into a Go
+// error. The ACP tee relays viewer requests through here so goose's error
+// (code, message, data) reaches the viewer verbatim.
+func (c *WSClient) CallRPC(ctx context.Context, method string, params any) (json.RawMessage, *RPCError, error) {
+	req := newRequest(method, params)
+
+	respCh := c.registerPending(req.ID)
+	defer c.unregisterPending(req.ID)
+
+	if err := c.Send(req); err != nil {
+		return nil, nil, fmt.Errorf("send %s: %w", method, err)
+	}
+
+	select {
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
+	case <-c.done:
+		return nil, nil, fmt.Errorf("websocket connection closed")
+	case msg := <-respCh:
+		return msg.Result, msg.Error, nil
 	}
 }
 

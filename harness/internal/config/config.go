@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
+	"time"
 )
 
 const (
@@ -29,6 +31,19 @@ type Config struct {
 	// AgentWorkflowRun stages. Both empty for standalone AgentRuns.
 	WorkflowStage      string
 	WorkflowStageCount string
+
+	// ACPTee: the harness fronts the pod ACP port and tees the run's
+	// live stream to attached viewers (default on; HARNESS_ACP_TEE=off
+	// restores goose owning the port directly).
+	ACPTee bool
+	// HITLTimeout: how long a permission ask waits for an attached
+	// viewer before the headless fallback (HARNESS_HITL_TIMEOUT_SECONDS).
+	HITLTimeout time.Duration
+	// HITLSteer: attached viewers may redirect the run session —
+	// `_goose/unstable/session/steer` and `session/cancel` frames naming
+	// the run session are relayed onto the run connection (default on;
+	// HARNESS_HITL_STEER=off makes the run stream watch-only).
+	HITLSteer bool
 
 	// Prompt context layers, composed by internal/prompt.
 	AgentPrompt       string
@@ -76,7 +91,25 @@ func LoadFromEnv() (*Config, error) {
 		cfg.MaxTurns = n
 	}
 
+	// Default-ON kill switches: the one E2E path must exercise the tee
+	// (and steering), so only an explicit opt-out disables them.
+	cfg.ACPTee = !envSwitchedOff("HARNESS_ACP_TEE")
+	cfg.HITLSteer = !envSwitchedOff("HARNESS_HITL_STEER")
+	if n, err := strconv.Atoi(os.Getenv("HARNESS_HITL_TIMEOUT_SECONDS")); err == nil && n > 0 {
+		cfg.HITLTimeout = time.Duration(n) * time.Second
+	}
+
 	return cfg, nil
+}
+
+// envSwitchedOff reports whether a default-ON feature env var is set to an
+// explicit opt-out value.
+func envSwitchedOff(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "off", "false", "0", "disabled":
+		return true
+	}
+	return false
 }
 
 // workflowGuideFromEnv reads the workflow guide the controller injects.

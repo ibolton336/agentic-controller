@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/konveyor/migration-harness/internal/hub"
 	"github.com/konveyor/migration-harness/internal/logging"
 	"github.com/konveyor/migration-harness/internal/prompt"
+	"github.com/konveyor/migration-harness/internal/tee"
 	"github.com/konveyor/migration-harness/internal/watcher"
 )
 
@@ -154,9 +156,15 @@ func runStage(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// 5. Start goose serve
+	// 5. Start goose serve. With the ACP tee (default) goose binds
+	// loopback on :4001 and the harness owns the pod's :4000 endpoint;
+	// with HARNESS_ACP_TEE=off goose takes :4000 itself as before.
 	logging.Header("Goose Setup")
-	srv, err := goose.StartServe(ctx, 0, cfg.ACPSecretKey, cfg.Provider, cfg.Model, cfg.APIKey, cfg.Endpoint)
+	goosePort := 0
+	if cfg.ACPTee {
+		goosePort = goose.LoopbackACPPort
+	}
+	srv, err := goose.StartServe(ctx, goosePort, cfg.ACPTee, cfg.ACPSecretKey, cfg.Provider, cfg.Model, cfg.APIKey, cfg.Endpoint)
 	if err != nil {
 		return fmt.Errorf("start goose serve: %w", err)
 	}
@@ -175,6 +183,81 @@ func runStage(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("create session: %w", err)
 	}
 
+	// 6b. Expose the run: tee listener on the pod ACP port. Viewers get
+	// a verbatim pipe to goose plus the run session's live stream —
+	// message/thought chunks, tool calls, usage — and may redirect the
+	// run (steer/cancel) unless HARNESS_HITL_STEER=off. Permission asks
+	// are offered to whoever is watching. Failure here never fails the
+	// run — it only loses live viewers.
+	var teeSrv *tee.Server
+	if cfg.ACPTee {
+		t := tee.New(tee.Config{
+			SecretKey:    cfg.ACPSecretKey,
+			UpstreamAddr: fmt.Sprintf("127.0.0.1:%d", srv.Port()),
+			HITLTimeout:  cfg.HITLTimeout,
+			SteerEnabled: cfg.HITLSteer,
+		})
+		if err := t.Start(goose.DefaultACPPort); err != nil {
+			logging.Warn("ACP tee: %v — run continues without live viewers", err)
+		} else {
+			defer t.Stop()
+			t.AttachRun(wsClient, sessionID)
+			session.SetPermissionForwarder(t)
+			teeSrv = t
+			logging.Ok("ACP tee on :%d (goose loopback :%d, viewer steering %s)",
+				goose.DefaultACPPort, srv.Port(), map[bool]string{true: "on", false: "off"}[cfg.HITLSteer])
+		}
+	}
+
+	// Harness lifecycle → viewer status frames, in standard ACP
+	// vocabulary. Everything is a no-op without a live tee.
+	emitPlan := func(prep, agentRun, finish string) {
+		if teeSrv == nil {
+			return
+		}
+		entry := func(content, status string) map[string]any {
+			return map[string]any{"content": content, "priority": "medium", "status": status}
+		}
+		teeSrv.EmitRunUpdate(map[string]any{
+			"sessionUpdate": "plan",
+			"entries": []map[string]any{
+				entry("Prepare workspace: clone, branch, grounding data", prep),
+				entry("Agent works the stage task", agentRun),
+				entry(fmt.Sprintf("Push results to branch %s", creds.Branch), finish),
+			},
+		})
+	}
+	var pushSeq atomic.Int64
+	emitPush := func(title string, fn func() error) error {
+		if teeSrv == nil {
+			return fn()
+		}
+		id := fmt.Sprintf("harness-push-%d", pushSeq.Add(1))
+		teeSrv.EmitRunUpdate(map[string]any{
+			"sessionUpdate": "tool_call", "toolCallId": id, "title": title,
+			"kind": "execute", "status": "in_progress",
+		})
+		err := fn()
+		status := "completed"
+		if err != nil {
+			status = "failed"
+		}
+		teeSrv.EmitRunUpdate(map[string]any{
+			"sessionUpdate": "tool_call_update", "toolCallId": id, "status": status,
+		})
+		return err
+	}
+	emitNotice := func(format string, args ...any) {
+		if teeSrv == nil {
+			return
+		}
+		teeSrv.EmitRunNotice(fmt.Sprintf(format, args...))
+	}
+
+	// Workspace prep all happened before the tee existed; publish it as
+	// already done so a viewer's first glance shows the ladder.
+	emitPlan("completed", "pending", "pending")
+
 	// 7. Build prompt from context layers
 	stagePrompt := prompt.Build(prompt.Layers{
 		AgentPrompt:   cfg.AgentPrompt,
@@ -185,7 +268,9 @@ func runStage(cmd *cobra.Command, args []string) error {
 
 	// 8. Start filesystem watcher BEFORE blocking prompt
 	pushFn := func() error {
-		return git.Push(ctx, creds, repo, creds.Branch)
+		return emitPush("git push (auto-commit watcher)", func() error {
+			return git.Push(ctx, creds, repo, creds.Branch)
+		})
 	}
 	w, err := watcher.New(cloneDir, pushFn)
 	if err != nil {
@@ -199,13 +284,27 @@ func runStage(cmd *cobra.Command, args []string) error {
 	// 9. Send single ACP prompt (blocks until goose finishes or MaxTurns is hit)
 	logging.Header("Running Stage")
 	logging.Info("max turns: %d", cfg.MaxTurns)
-	_, err = session.SendPrompt(ctx, sessionID, []acp.ContentBlock{
+	emitPlan("completed", "in_progress", "pending")
+	if teeSrv != nil {
+		teeSrv.SetRunActive(true)
+	}
+	promptResult, err := session.SendPrompt(ctx, sessionID, []acp.ContentBlock{
 		{Type: "text", Text: stagePrompt},
 	}, cfg.MaxTurns)
+	if teeSrv != nil {
+		teeSrv.SetRunActive(false)
+	}
 
+	// A viewer's session/cancel surfaces as a clean stop with
+	// stopReason=cancelled — a deliberate human abort, not a success.
+	cancelled := err == nil && promptResult != nil && promptResult.StopReason == "cancelled"
+	if cancelled {
+		logging.Warn("run cancelled by an attached viewer")
+	}
 	if err != nil {
 		logging.Err("prompt failed: %v", err)
 	}
+	emitPlan("completed", "completed", "in_progress")
 
 	// 10. Check goose health
 	if !srv.Alive() {
@@ -223,22 +322,33 @@ func runStage(cmd *cobra.Command, args []string) error {
 	w.Stop()
 
 	// 13. Determine exit status from ACP/goose signals
-	stageFailed := err != nil || !srv.Alive()
+	stageFailed := err != nil || !srv.Alive() || cancelled
 
 	// 14. Final push (use a fresh context — the signal context may
 	// already be cancelled after SIGINT)
 	logging.Header("Final Push")
 	pushCtx, pushCancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer pushCancel()
-	if err := git.Push(pushCtx, creds, repo, creds.Branch); err != nil {
+	if err := emitPush("git push (final)", func() error {
+		return git.Push(pushCtx, creds, repo, creds.Branch)
+	}); err != nil {
+		emitNotice("stage failed — final push error: %v", err)
 		return fmt.Errorf("final push: %w", err)
 	}
+	emitPlan("completed", "completed", "completed")
 
 	// 15. Exit
 	if stageFailed {
+		switch {
+		case cancelled:
+			emitNotice("run cancelled by viewer — partial work pushed to branch %s", creds.Branch)
+		default:
+			emitNotice("stage failed — partial work pushed to branch %s", creds.Branch)
+		}
 		logging.Err("stage failed")
 		return fmt.Errorf("stage failed")
 	}
+	emitNotice("stage succeeded — results pushed to branch %s", creds.Branch)
 	logging.Ok("stage succeeded")
 	return nil
 }

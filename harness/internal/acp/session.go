@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/konveyor/migration-harness/internal/logging"
 )
@@ -12,6 +13,9 @@ import (
 type SessionClient struct {
 	ws          *WSClient
 	initialized bool
+
+	fwdMu     sync.Mutex
+	forwarder PermissionForwarder
 }
 
 // NewSessionClient creates a session client from an existing WebSocket
@@ -22,11 +26,57 @@ func NewSessionClient(ws *WSClient) *SessionClient {
 	return c
 }
 
+// PermissionForwardOutcome says what happened when a permission ask was
+// offered to attached viewers.
+type PermissionForwardOutcome int
+
+const (
+	// ForwardNoViewers: nobody is attached; the caller applies the
+	// headless fail-closed policy.
+	ForwardNoViewers PermissionForwardOutcome = iota
+	// ForwardAnswered: a viewer answered; the result is their
+	// RequestPermissionResponse result object, to relay verbatim.
+	ForwardAnswered
+	// ForwardTimeout: viewers were attached but none answered in time.
+	// The caller applies the same fail-closed deny as ForwardNoViewers;
+	// the forwarder additionally marks viewers unresponsive so follow-up
+	// asks resolve fast until a human shows signs of life again.
+	ForwardTimeout
+)
+
+// PermissionForwarder relays a session/request_permission ask to attached
+// human viewers (the ACP tee). Implementations must be safe for concurrent
+// use and must not block past their own timeout.
+type PermissionForwarder interface {
+	ForwardPermission(params json.RawMessage) (json.RawMessage, PermissionForwardOutcome)
+}
+
+// SetPermissionForwarder installs the viewer relay consulted before the
+// fail-closed deny in answerAgentRequest.
+func (c *SessionClient) SetPermissionForwarder(f PermissionForwarder) {
+	c.fwdMu.Lock()
+	c.forwarder = f
+	c.fwdMu.Unlock()
+}
+
+func (c *SessionClient) permissionForwarder() PermissionForwarder {
+	c.fwdMu.Lock()
+	defer c.fwdMu.Unlock()
+	return c.forwarder
+}
+
 // InitParams are required for the ACP initialize handshake.
 type InitParams struct {
 	ProtocolVersion string     `json:"protocolVersion"`
 	ClientInfo      ClientInfo `json:"clientInfo"`
-	Capabilities    struct{}   `json:"capabilities"`
+	// ClientCapabilities is the ACP field name (the earlier "capabilities"
+	// spelling was never read by goose). The goose extension point lives
+	// under _meta.goose.
+	ClientCapabilities ClientCapabilities `json:"clientCapabilities"`
+}
+
+type ClientCapabilities struct {
+	Meta map[string]any `json:"_meta,omitempty"`
 }
 
 type ClientInfo struct {
@@ -53,6 +103,14 @@ func (c *SessionClient) Initialize(ctx context.Context) (*InitResult, error) {
 		ClientInfo: ClientInfo{
 			Name:    "migration-harness",
 			Version: "0.1.0",
+		},
+		// customNotifications turns on goose's `_goose/unstable/session/update`
+		// stream: usage_update (live token/context spend) and status_message
+		// (notices + progress). The tee forwards both to attached viewers.
+		ClientCapabilities: ClientCapabilities{
+			Meta: map[string]any{
+				"goose": map[string]any{"customNotifications": true},
+			},
 		},
 	})
 	if err != nil {
@@ -232,10 +290,12 @@ type PermissionOption struct {
 // escalation via SECURITY_PROMPT_ENABLED even in auto mode, would hang the
 // stage until the pod deadline.
 //
-// The harness is headless, so the policy is fail-closed: deny permission
-// requests explicitly (goose declines the tool and the turn continues) and
-// reject everything else with method-not-found (goose maps that to a
-// cancelled/declined outcome as well).
+// Permission asks are offered to attached viewers first (the ACP tee): a
+// human watching the run answers, and their outcome is relayed verbatim.
+// With nobody attached the harness is headless and the policy is
+// fail-closed: deny permission requests explicitly (goose declines the
+// tool and the turn continues) and reject everything else with
+// method-not-found (goose maps that to a cancelled/declined outcome too).
 func (c *SessionClient) answerAgentRequest(msg *RPCResponse) {
 	id := msg.ID
 
@@ -259,6 +319,27 @@ func (c *SessionClient) answerAgentRequest(msg *RPCResponse) {
 			logging.Warn("reply to permission request: %v", err)
 		}
 		return
+	}
+
+	if f := c.permissionForwarder(); f != nil {
+		result, outcome := f.ForwardPermission(msg.Params)
+		switch outcome {
+		case ForwardAnswered:
+			logging.Info("permission for %q answered by attached viewer", params.ToolCall.Title)
+			if err := c.ws.SendResponse(id, result, nil); err != nil {
+				logging.Warn("relay permission answer: %v", err)
+			}
+			return
+		case ForwardTimeout:
+			// A viewer was attached but nobody answered. Fail closed —
+			// an ask that self-approves on a timer is no ask at all. The
+			// forwarder marks viewers unresponsive after a timeout, so
+			// follow-up asks (goose retrying the declined tool) deny
+			// fast instead of waiting out the clock each time.
+			logging.Warn("permission for %q unanswered by viewer — denying (fail closed)", params.ToolCall.Title)
+		case ForwardNoViewers:
+			// fall through to the headless deny
+		}
 	}
 
 	// Prefer an explicit one-shot rejection; an unknown or missing option
