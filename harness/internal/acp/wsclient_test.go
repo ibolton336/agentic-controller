@@ -190,12 +190,22 @@ func TestRawSubscriptionSeesWireBytes(t *testing.T) {
 		t.Fatal("raw subscriber saw nothing")
 	}
 
-	// A response frame must not reach raw subscribers.
+	// Non-notification frames must not reach raw subscribers. Push a
+	// response, an agent request, then a sentinel notification: the
+	// socket is read sequentially, so the sentinel arriving next proves
+	// the earlier frames were processed and excluded.
 	s.push(`{"jsonrpc":"2.0","id":424242,"result":{}}`)
+	s.push(`{"jsonrpc":"2.0","id":"ask-1","method":"session/request_permission","params":{}}`)
+	sentinel := `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk"}}}`
+	s.push(sentinel)
+
 	select {
 	case n := <-raw:
-		t.Fatalf("raw subscriber got a non-notification: %s", n.Frame)
-	case <-time.After(200 * time.Millisecond):
+		if string(n.Frame) != sentinel {
+			t.Fatalf("raw subscriber got a non-notification before the sentinel: %s", n.Frame)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("sentinel never reached raw subscriber")
 	}
 }
 
