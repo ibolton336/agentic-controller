@@ -852,6 +852,19 @@ func TestStopStaysBoundedWithStalledViewers(t *testing.T) {
 	// Two viewers whose writers never signal flushed — the shape of a
 	// socket stalled inside WriteMessage.
 	stalled := make([]*viewer, 0, 2)
+	// Release them however this test exits. On t.Fatal the closes below
+	// never run, and the deferred cleanup Stop would then wait on these
+	// same viewers — a test that verifies Stop is bounded must not rely
+	// on Stop being bounded to clean up after itself.
+	defer func() {
+		for _, v := range stalled {
+			select {
+			case <-v.flushed:
+			default:
+				close(v.flushed)
+			}
+		}
+	}()
 	for i := 0; i < 2; i++ {
 		v := &viewer{
 			out:     make(chan outFrame, 1),
@@ -872,10 +885,5 @@ func TestStopStaysBoundedWithStalledViewers(t *testing.T) {
 	case <-done:
 	case <-time.After(shutdownFlushTimeout + 5*time.Second):
 		t.Fatal("Stop exceeded its flush budget — a later viewer waited with no deadline")
-	}
-
-	// Let the deferred cleanup Stop return immediately.
-	for _, v := range stalled {
-		close(v.flushed)
 	}
 }

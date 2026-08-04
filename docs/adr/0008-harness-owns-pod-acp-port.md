@@ -111,9 +111,17 @@ This is a change of implementation, not of decision:
 
 - **Controller stays out of ACP** — unchanged.
 - **UI connects to agent pods directly** — unchanged, and now actually
-  delivers the run. The external contract is byte-identical: same
-  `pod:4000/acp` path, same `X-Secret-Key` / `?token=` carriers, same
-  headless Service DNS. Nothing outside the pod changes.
+  delivers the run. Precisely: the *endpoint* contract is unchanged —
+  same `pod:4000/acp` path, same `X-Secret-Key` / `?token=` carriers,
+  same headless Service DNS — so nothing outside the pod is reconfigured
+  and an existing client still connects and drives its own session as
+  before. What a client *observes and may do* is deliberately extended,
+  not preserved: it additionally receives the run session's teed frames
+  and the harness's synthetic lifecycle updates, it may be offered
+  `kperm-*` permission asks, and it may steer or cancel the run session
+  (while a `session/prompt` against an active run session is now
+  refused). Those extensions are the point of this ADR; the compatibility
+  claim is about the endpoint, not about the frames on it.
 - **Users without the UI** — `kubectl port-forward <pod> 4000:4000`
   still reaches an ACP endpoint, now the tee.
 - **The harness bridge for non-ACP runtimes** (0002's multi-runtime
