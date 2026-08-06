@@ -1,0 +1,4 @@
+kind: bugfix
+description: >
+  Add aws_bedrock provider mapping to harness so AWS Bedrock
+  credentials and endpoint are recognised without warnings.
