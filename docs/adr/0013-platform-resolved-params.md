@@ -82,11 +82,28 @@ string (`konveyor.io/application-repository-url`), following the
 platform-neutral, the vocabulary belongs to whoever resolves it and lives
 in documentation, not CRD validation.
 
+Sources declare **what a value means, not who fills it in.** Two
+consumers, two moments:
+
+- The **UI** consumes sources at form time: a recognized source means
+  "this comes from the selected application" — no input field, a resolved
+  preview row instead. This is the contract that collapses the create
+  form, and it holds regardless of the platform behind the form.
+- **Resolution** happens per the platform's architecture. On the Konveyor
+  Hub path there is NO create-time resolution: Hub injects connectivity
+  (`HUB_BASE_URL`, `APP_ID`, scoped token) and the harness pulls
+  application data from Hub at runtime (ADR 0006, enhancement #295 —
+  which rejected the smart-endpoint alternative). Create-time resolution
+  remains the mechanism for hosts WITHOUT a runtime data plane — the IDE
+  extension and the standalone prototype shim — which fill `spec.params`
+  from the application record when the run is created.
+
 Semantics (normative):
 
-- A param with a source **the consumer recognizes** is resolved by the
-  platform (Hub) at run creation, from the caller-selected application. The
-  UI does not render a field for it; it shows what will be resolved.
+- A param with a source **the consumer recognizes** is platform-supplied —
+  by the harness at runtime (Hub path) or by the creating host (standalone
+  path). The UI does not render a field for it; it shows what will be
+  resolved.
 - A param **without** a source is caller-supplied (form field).
 - **Fail open, and it outranks every other rule here:** a consumer that
   does not recognize a source value MUST treat the param exactly as if it
@@ -139,20 +156,18 @@ application's credential and mounts it via `AgentRun.spec.envFrom`.
 Applications without an identity (public repos) resolve to nothing and the
 run proceeds without credentials.
 
-**Open question surfaced by wiring this to real Hub.** Repo URL and branch
-are plain fields on a Hub `Application` — read them and you're done. A
-credential is *not*: Hub stores it as an `Identity` in its own encrypted
-vault, and the REST API exposes the identity's *name*, never the secret.
-So `application-identity` resolves cleanly to "this app uses Hub identity
-`coolstore-git`", but turning that into something the sandbox can use
-requires the platform to **decrypt the vault identity and materialize it
-into the pod** (as a mounted Secret or injected env). Production Hub, which
-owns the vault, does this itself. The shim can't — it only sees the name —
-so it *bridges* known identity names to a pre-created k8s Secret
-(`IDENTITY_SECRET_BRIDGE`) and the UI shows both: `Hub identity:
-coolstore-git → git-credentials-coolstore`. That bridge is the one honest
-stub left in the flow, and materialization is the concrete thing Hub must
-own.
+**Decision: on the Hub path, credentials resolve at runtime, not create
+time.** Hub stores credentials as `Identity` records in its encrypted
+vault; the REST API exposes the identity's name, never the secret. Rather
+than Hub decrypting and materializing secrets into the pod at create time,
+the harness fetches the decrypted identity from Hub at runtime using its
+scoped token (enhancement #295 §945–953) — the same pattern as every other
+piece of application data. No secret ever transits the create path.
+
+Create-time `envFrom` mounting remains the standalone-host mechanism. The
+prototype shim, which has no runtime data plane, bridges known identity
+names to pre-created k8s Secrets (`IDENTITY_SECRET_BRIDGE`) — an explicit
+stub of the runtime resolution Hub provides for real.
 
 ### (d) API surface
 
@@ -164,9 +179,9 @@ SHIM API v1 (and therefore the future Hub proxy) gains:
   back to a built-in stub only when Hub is unreachable. Repo URL/branch and
   the identity name are genuine Hub data; only the identity→Secret bridge is
   stubbed (see (c)). Production is Hub reading its own Application table.
-- `POST /api/agentruns` accepts `applicationRef`; the platform resolves
-  sourced params/credentials from that application per the semantics
-  above.
+- `POST /api/agentruns` accepts `applicationRef`; what it implies depends
+  on the host per the semantics above — Hub coordinates + label on the
+  Konveyor path, create-time fill of sourced params on standalone hosts.
 
 ## Consequences
 

@@ -63,12 +63,10 @@ verified against the real controller (PR #4) on a live cluster:
   (see Consequences for the prepared upstream patch).
 - **Service:** the auto-created Service is HEADLESS (`clusterIP: None`, no
   ports). Clients MUST port-forward / dial the POD, not the Service.
-- **Injected env** (contract between controller and harness images):
-  `GOOSE_SERVER__SECRET_KEY`, `KONVEYOR_PARAM_<NAME>`, `KONVEYOR_PROMPT`,
-  `KONVEYOR_INSTRUCTIONS`. This is the shipped mechanism these facts were
-  verified against; ADR 0009 (params.json) proposes replacing the
-  per-param env vars with a mounted file — the client-facing contract in
-  this ADR is unaffected, since params ride the CR, not the pod env.
+- **Params ride the CR, not the pod.** Clients set `spec.params` (and
+  `spec.instructions`); how the controller delivers them into the sandbox
+  (`KONVEYOR_PARAM_*` env vars at verification time; `params.json` per
+  ADR 0009) is invisible to clients and MUST NOT be depended on.
 - **AgentRun spec is IMMUTABLE after create** (a whole-spec CEL rule).
   Clients MUST delete + recreate to change anything; PATCHing spec will be
   rejected by the apiserver.
@@ -97,41 +95,24 @@ code, and only the transport differs per environment:
   HTTP + a plain WebSocket — no headers, no kube credentials; the proxy owns
   endpoint resolution, tunneling, and secret injection server-side.
 
-The local **hub-shim** implements the proxy side today, and its HTTP surface
-— **SHIM HTTP API v1** — is the reference shape the future Konveyor Hub
-passthrough proxy is expected to expose:
+The local **hub-shim** implements the proxy side today. Its HTTP surface —
+SHIM HTTP API v1 — is the reference shape the Hub passthrough endpoints
+replace, and lives as a working spec in
+[docs/agent-api-spec.md](../agent-api-spec.md), coordinated with the Hub
+implementation (#72). The decision this ADR freezes is the layering above
+and that the spec is verified against the live controller before Hub
+reimplements it — not the endpoint shapes themselves, which evolve with
+#72.
 
-| Method | Route | Behavior |
-|--------|-------|----------|
-| GET | `/healthz` | 200 `ok` |
-| GET | `/api/applications` | 200 `Application[]` — the platform's application inventory (mocked in the shim; Hub serves its real records). Source of truth for resolved params/credentials, see ADR 0013. |
-| GET | `/api/agents` | 200 `AgentResource[]` (full CRs, metadata+spec), **filtered to `konveyor.io/managed=true`** |
-| GET | `/api/agents/:name` | 200 `AgentResource` \| 404 (never label-filtered) |
-| GET | `/api/gateways[/:name]` | 200 `Gateway[]` \| `Gateway` \| 404 (was `/api/llmproviders` before the #100 rename) |
-| GET | `/api/skillcards[/:name]` | 200 `SkillCard[]` \| `SkillCard` \| 404 |
-| GET | `/api/skillcollections[/:name]` | 200 `SkillCollection[]` \| `SkillCollection` \| 404 |
-| GET | `/api/agentruns[?application=<hub id>]` | 200 `AgentRun[]` (full CRs). `application` filters by the `konveyor.io/application` label (ADR 0013) — a `client.List()` label selector, never a client-side scan. Runs predating the label are not selected. 400 on a non-numeric id; 400 on any resource that cannot honour the filter, never a silent unfiltered list. |
-| POST | `/api/agentruns` (body `{agentRef, params?: Record<string,string>, instructions?, applicationRef?, targetBranch?, gateway?}`) | 201 `AgentRun` (generateName `ui-`, params mapped to `[{name,value}]`). When `applicationRef` is set, the platform resolves the Agent's declared param/credential sources from that application (ADR 0013): resolved params merge under caller-supplied ones, credentials become `spec.envFrom`, and the run is stamped `konveyor.io/application: "<id>"`. 400 on unknown `applicationRef`, or a required param with a recognized source the application cannot supply. |
-| GET | `/api/agentruns/:name` | 200 `AgentRun` \| 404 |
-| DELETE | `/api/agentruns/:name` | 204 |
-| GET | `/api/agentworkflows[/:name]` | 200 `AgentWorkflow[]` \| `AgentWorkflow` \| 404 (list **filtered to `konveyor.io/managed=true`**) |
-| GET | `/api/agentworkflowruns[?application=<hub id>]` | 200 `AgentWorkflowRun[]`. Same `application` semantics as `/api/agentruns`; composes with the managed filter as one selector. **Stage runs do not carry the parent's application label** — the controller builds their labels from scratch — so filtering `agentruns` finds single runs only. |
-| GET | `/api/agentworkflowruns/:name` | 200 `AgentWorkflowRun` \| 404 |
-| POST | `/api/agentworkflowruns` (body `{workflowRef, params?, applicationRef?, targetBranch?, gateway?}`) | 201 `AgentWorkflowRun` (generateName `ui-`), labelled `konveyor.io/managed` plus `konveyor.io/application` when scoped. |
-| DELETE | `/api/agentworkflowruns/:name` | 204 |
-| WS | `/api/agentruns/:name/acp` | Resolves the run's ACP endpoint (waitForAcpEndpoint semantics, 60s), opens a port-forward tunnel to the pod, dials `ws://127.0.0.1:<tunnel>/acp` upstream WITH `X-Secret-Key` (key read from the run's Secret), then pipes frames bidirectionally. Client close → close upstream + tunnel; upstream close/error → close client 1011 with reason. |
+### (c) Spec immutability ⇒ new-run semantics (cancel, never delete)
 
-The shim itself is unauthenticated (localhost dev tool) and serves
-`Access-Control-Allow-Origin: *` on `/api/*` (plus OPTIONS preflight). The
-real Hub proxy adds its own authn/z in front of the same shape.
-
-### (c) Spec immutability ⇒ delete + recreate semantics
-
-Because the AgentRun spec is immutable, every client "edit"/"retry" affordance
-is defined as **delete the run, create a new one** (owner references
-garbage-collect the Sandbox/Secret/pod). UIs MUST NOT offer in-place spec
-mutation; run identity is per-attempt, and history is preserved by listing
-past runs, not by mutating one.
+Because the AgentRun spec is immutable, every client "edit"/"retry"
+affordance creates a NEW run — UIs MUST NOT offer in-place spec mutation;
+run identity is per-attempt. The platform surface cancels in-flight runs
+(token revocation + `spec.cancel`, ADR 0006) and never deletes them:
+completed runs age out via per-condition TTL pruning, which is what keeps
+"history is the run list" true. The prototype shim's DELETE route predates
+this and is a dev convenience, not part of the platform contract.
 
 ## Consequences
 
