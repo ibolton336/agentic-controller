@@ -374,6 +374,98 @@ var _ = Describe("AgentWorkflowRun Controller", func() {
 		})
 	})
 
+	Context("when the workflow run carries caller-supplied labels", func() {
+		const (
+			workflowName = "apr-ctrl-labels-workflow"
+			pbRunName    = "apr-ctrl-labels-run"
+			agentName    = "apr-ctrl-labels-agent"
+			gwName       = "apr-prov-labels"
+			secretName   = "apr-secret-labels"
+		)
+
+		It("should propagate parent labels to stage AgentRuns with controller-owned keys winning", func() {
+			cleanup := makeReadyGateway(gwName, secretName)
+			defer cleanup()
+
+			agent := &konveyoriov1alpha1.Agent{
+				ObjectMeta: metav1.ObjectMeta{Name: agentName, Namespace: testNamespace},
+				Spec: konveyoriov1alpha1.AgentSpec{
+					Image:    testAgentImage,
+					Gateways: []konveyoriov1alpha1.AgentGatewayRef{{Ref: gwName}},
+				},
+			}
+			Expect(k8sClient.Create(ctx, agent)).To(Succeed())
+			waitForAgentReady(agentName)
+
+			workflow := &konveyoriov1alpha1.AgentWorkflow{
+				ObjectMeta: metav1.ObjectMeta{Name: workflowName, Namespace: testNamespace},
+				Spec: konveyoriov1alpha1.AgentWorkflowSpec{
+					Stages: []konveyoriov1alpha1.AgentWorkflowStage{
+						{Name: "stage-a", AgentRef: agentName, Instructions: "Do stage A"},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, workflow)).To(Succeed())
+			waitForWorkflowReady(workflowName)
+
+			By("creating the workflow run with caller labels and spoofed controller-owned keys")
+			pbRun := &konveyoriov1alpha1.AgentWorkflowRun{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      pbRunName,
+					Namespace: testNamespace,
+					Labels: map[string]string{
+						"konveyor.io/application": "42",
+						"custom/foo":              "bar",
+						labelManagedBy:            "spoofed-manager",
+						labelAgentWorkflowRun:     "spoofed-run",
+						labelStage:                "spoofed-stage",
+					},
+				},
+				Spec: konveyoriov1alpha1.AgentWorkflowRunSpec{
+					WorkflowRef: workflowName,
+					Gateway:     gwName,
+				},
+			}
+			Expect(k8sClient.Create(ctx, pbRun)).To(Succeed())
+
+			By("waiting for the stage AgentRun to be created")
+			pbRunKey := types.NamespacedName{Name: pbRunName, Namespace: testNamespace}
+			expectedStageName := stageAgentRunName(pbRunName, "stage-a")
+			Eventually(func(g Gomega) {
+				var fetched konveyoriov1alpha1.AgentWorkflowRun
+				g.Expect(k8sClient.Get(ctx, pbRunKey, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Stages).To(HaveLen(1))
+				g.Expect(fetched.Status.Stages[0].AgentRunName).To(Equal(expectedStageName))
+			}, timeout, interval).Should(Succeed())
+
+			By("verifying the stage AgentRun inherits caller labels")
+			var stageRun konveyoriov1alpha1.AgentRun
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: expectedStageName, Namespace: testNamespace,
+			}, &stageRun)).To(Succeed())
+			Expect(stageRun.Labels).To(HaveKeyWithValue("konveyor.io/application", "42"))
+			Expect(stageRun.Labels).To(HaveKeyWithValue("custom/foo", "bar"))
+
+			By("verifying controller-owned keys keep controller values")
+			Expect(stageRun.Labels).To(HaveKeyWithValue(labelManagedBy, managedByLabel))
+			Expect(stageRun.Labels).To(HaveKeyWithValue(labelAgentWorkflowRun, pbRunName))
+			Expect(stageRun.Labels).To(HaveKeyWithValue(labelStage, "stage-a"))
+
+			By("cleaning up")
+			var runList konveyoriov1alpha1.AgentRunList
+			Expect(k8sClient.List(ctx, &runList,
+				client.InNamespace(testNamespace),
+				client.MatchingLabels{labelAgentWorkflowRun: pbRunName},
+			)).To(Succeed())
+			for i := range runList.Items {
+				Expect(k8sClient.Delete(ctx, &runList.Items[i])).To(Succeed())
+			}
+			Expect(k8sClient.Delete(ctx, pbRun)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, workflow)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, agent)).To(Succeed())
+		})
+	})
+
 	Context("when a stage fails", func() {
 		const (
 			workflowName = "apr-ctrl-fail-workflow"
