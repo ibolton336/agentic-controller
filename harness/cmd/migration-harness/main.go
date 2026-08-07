@@ -124,6 +124,15 @@ func runStage(cmd *cobra.Command, args []string) error {
 	}
 	logging.Ok("cloned to %s, branch %s", cloneDir, creds.Branch)
 
+	// Base of this stage run: everything past this commit is work the run
+	// produced. Push compares HEAD against it so runs that produce no
+	// commits do not create empty remote branches.
+	baseSHA, err := git.HeadSHA(repo)
+	if err != nil {
+		// Fail open — an unknown base must never block a push of real work.
+		logging.Warn("resolve base commit: %v", err)
+	}
+
 	// 4. Discover skills early — controls which setup steps run
 	skillPaths, err := discoverSkills()
 	if err != nil {
@@ -295,7 +304,7 @@ func runStage(cmd *cobra.Command, args []string) error {
 	// 8. Start filesystem watcher BEFORE blocking prompt
 	pushFn := func() error {
 		return emitPush("git push (auto-commit watcher)", func() error {
-			return git.Push(ctx, creds, repo, creds.Branch)
+			return git.Push(ctx, creds, repo, creds.Branch, baseSHA)
 		})
 	}
 	w, err := watcher.New(cloneDir, pushFn)
@@ -356,7 +365,7 @@ func runStage(cmd *cobra.Command, args []string) error {
 	pushCtx, pushCancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer pushCancel()
 	if err := emitPush("git push (final)", func() error {
-		return git.Push(pushCtx, creds, repo, creds.Branch)
+		return git.Push(pushCtx, creds, repo, creds.Branch, baseSHA)
 	}); err != nil {
 		emitNotice("stage failed — final push error: %v", err)
 		return fmt.Errorf("final push: %w", err)

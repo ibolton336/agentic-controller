@@ -12,6 +12,8 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	gogitcfg "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+
+	"github.com/konveyor/migration-harness/internal/logging"
 )
 
 func isChildOf(path, root string) bool {
@@ -187,7 +189,29 @@ func CheckoutBranch(repo *gogit.Repository, branch string) error {
 	return nil
 }
 
-func Push(ctx context.Context, cred *Credentials, repo *gogit.Repository, branch string) error {
+// HeadSHA returns the hash of the current HEAD commit.
+func HeadSHA(repo *gogit.Repository) (string, error) {
+	head, err := repo.Head()
+	if err != nil {
+		return "", fmt.Errorf("resolve HEAD: %w", err)
+	}
+	return head.Hash().String(), nil
+}
+
+// Push updates refs/heads/<branch> on origin. baseSHA is the commit the
+// run started from (HEAD after clone/checkout): when HEAD still equals
+// it the run produced no commits and the push is skipped, so no-op runs
+// do not litter the remote with empty branches. An empty baseSHA
+// disables the check — an unknown base must never block a push of real
+// work.
+func Push(ctx context.Context, cred *Credentials, repo *gogit.Repository, branch, baseSHA string) error {
+	if baseSHA != "" {
+		if head, err := repo.Head(); err == nil && head.Hash().String() == baseSHA {
+			logging.Info("no commits produced; skipping push of %s", branch)
+			return nil
+		}
+	}
+
 	refSpec := gogitcfg.RefSpec(fmt.Sprintf("refs/heads/%s:refs/heads/%s", branch, branch))
 
 	err := repo.PushContext(ctx, &gogit.PushOptions{
