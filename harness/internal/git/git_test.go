@@ -174,8 +174,12 @@ func TestFullLifecycle(t *testing.T) {
 		t.Error("expected commit hash")
 	}
 
-	if err := Push(ctx, cred, repo, cred.Branch, baseSHA); err != nil {
+	pushed, err := Push(ctx, cred, repo, cred.Branch, baseSHA)
+	if err != nil {
 		t.Fatalf("Push: %v", err)
+	}
+	if !pushed {
+		t.Error("Push reported skipped despite new commits")
 	}
 
 	// Verify the branch exists on the remote
@@ -222,7 +226,7 @@ func TestPushWithoutCredsToStrippedRemoteFails(t *testing.T) {
 	})
 
 	// Push with nil credentials should fail
-	err = Push(ctx, &Credentials{RepoURL: remoteDir, Branch: cred.Branch}, repo, cred.Branch, baseSHA)
+	_, err = Push(ctx, &Credentials{RepoURL: remoteDir, Branch: cred.Branch}, repo, cred.Branch, baseSHA)
 	// For local bare repos, push still works without auth — this test verifies
 	// the function runs without panic. Real auth enforcement is server-side.
 	_ = err
@@ -328,8 +332,12 @@ func TestPushSkipsWhenNoNewCommits(t *testing.T) {
 
 	// No commits beyond the checkout point: the push must be skipped so
 	// no-op runs do not create empty branches on the remote.
-	if err := Push(ctx, cred, repo, cred.Branch, baseSHA); err != nil {
+	pushed, err := Push(ctx, cred, repo, cred.Branch, baseSHA)
+	if err != nil {
 		t.Fatalf("Push: %v", err)
+	}
+	if pushed {
+		t.Error("Push reported pushed despite no new commits")
 	}
 
 	remoteRepo, err := gogit.PlainOpen(remoteDir)
@@ -376,8 +384,12 @@ func TestPushWithNewCommitsPushes(t *testing.T) {
 		t.Fatalf("commit: %v", err)
 	}
 
-	if err := Push(ctx, cred, repo, cred.Branch, baseSHA); err != nil {
+	pushed, err := Push(ctx, cred, repo, cred.Branch, baseSHA)
+	if err != nil {
 		t.Fatalf("Push: %v", err)
+	}
+	if !pushed {
+		t.Error("Push reported skipped despite new commits")
 	}
 
 	remoteRepo, err := gogit.PlainOpen(remoteDir)
@@ -427,8 +439,12 @@ func TestPushSkipsWhenStageAddsNoNewCommits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stage 1 commit: %v", err)
 	}
-	if err := Push(ctx, cred, repo1, cred.Branch, base1); err != nil {
+	pushed1, err := Push(ctx, cred, repo1, cred.Branch, base1)
+	if err != nil {
 		t.Fatalf("stage 1 Push: %v", err)
+	}
+	if !pushed1 {
+		t.Error("stage 1 Push reported skipped despite new commits")
 	}
 
 	// Stage 2: fresh clone, checkout resolves the branch stage 1 pushed,
@@ -448,8 +464,12 @@ func TestPushSkipsWhenStageAddsNoNewCommits(t *testing.T) {
 	if base2 != hash.String() {
 		t.Fatalf("stage 2 base = %s, want stage 1 tip %s", base2, hash)
 	}
-	if err := Push(ctx, cred, repo2, cred.Branch, base2); err != nil {
+	pushed2, err := Push(ctx, cred, repo2, cred.Branch, base2)
+	if err != nil {
 		t.Fatalf("stage 2 Push: %v", err)
+	}
+	if pushed2 {
+		t.Error("stage 2 Push reported pushed despite no new commits")
 	}
 
 	remoteRepo, err := gogit.PlainOpen(remoteDir)

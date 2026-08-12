@@ -203,12 +203,18 @@ func HeadSHA(repo *gogit.Repository) (string, error) {
 // it the run produced no commits and the push is skipped, so no-op runs
 // do not litter the remote with empty branches. An empty baseSHA
 // disables the check — an unknown base must never block a push of real
-// work.
-func Push(ctx context.Context, cred *Credentials, repo *gogit.Repository, branch, baseSHA string) error {
+// work. The returned bool is false only when the push was skipped, so
+// callers can report the absence of results instead of claiming they
+// landed on the branch.
+func Push(ctx context.Context, cred *Credentials, repo *gogit.Repository, branch, baseSHA string) (bool, error) {
+	// Not redundant with the NoErrAlreadyUpToDate swallow below: when the
+	// remote branch does not exist yet, PushContext sends a create command
+	// (ZeroHash → local HEAD) instead of reporting already-up-to-date, so
+	// this guard is the only thing preventing empty branch creation.
 	if baseSHA != "" {
 		if head, err := repo.Head(); err == nil && head.Hash().String() == baseSHA {
 			logging.Info("no commits produced; skipping push of %s", branch)
-			return nil
+			return false, nil
 		}
 	}
 
@@ -220,8 +226,8 @@ func Push(ctx context.Context, cred *Credentials, repo *gogit.Repository, branch
 		RefSpecs:   []gogitcfg.RefSpec{refSpec},
 	})
 	if err != nil && !errors.Is(err, gogit.NoErrAlreadyUpToDate) {
-		return fmt.Errorf("push %s: %w", branch, err)
+		return false, fmt.Errorf("push %s: %w", branch, err)
 	}
 
-	return nil
+	return true, nil
 }
