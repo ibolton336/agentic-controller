@@ -58,8 +58,9 @@ func waitForWorkflowReady(workflowName string) {
 
 var _ = Describe("AgentWorkflowRun Controller", func() {
 	const (
-		timeout  = 10 * time.Second
-		interval = 250 * time.Millisecond
+		timeout    = 10 * time.Second
+		interval   = 250 * time.Millisecond
+		stageAName = "stage-a"
 	)
 
 	Context("when the referenced AgentWorkflow does not exist", func() {
@@ -121,7 +122,7 @@ var _ = Describe("AgentWorkflowRun Controller", func() {
 				Spec: konveyoriov1alpha1.AgentWorkflowSpec{
 					Guide: "Sequential test workflow",
 					Stages: []konveyoriov1alpha1.AgentWorkflowStage{
-						{Name: "stage-a", AgentRef: agentName, Instructions: "Do stage A"},
+						{Name: stageAName, AgentRef: agentName, Instructions: "Do stage A"},
 						{Name: "stage-b", AgentRef: agentName, Instructions: "Do stage B"},
 					},
 				},
@@ -144,12 +145,12 @@ var _ = Describe("AgentWorkflowRun Controller", func() {
 
 			By("verifying stage-a AgentRun is created with deterministic name")
 			pbRunKey := types.NamespacedName{Name: pbRunName, Namespace: testNamespace}
-			expectedStageAName := stageAgentRunName(pbRunName, "stage-a")
+			expectedStageAName := stageAgentRunName(pbRunName, stageAName)
 			Eventually(func(g Gomega) {
 				var fetched konveyoriov1alpha1.AgentWorkflowRun
 				g.Expect(k8sClient.Get(ctx, pbRunKey, &fetched)).To(Succeed())
 				g.Expect(fetched.Status.Phase).To(Equal(konveyoriov1alpha1.AgentRunPhaseRunning))
-				g.Expect(fetched.Status.CurrentStage).To(Equal("stage-a"))
+				g.Expect(fetched.Status.CurrentStage).To(Equal(stageAName))
 				g.Expect(fetched.Status.Stages).To(HaveLen(2))
 				g.Expect(fetched.Status.Stages[0].AgentRunName).To(Equal(expectedStageAName))
 			}, timeout, interval).Should(Succeed())
@@ -169,7 +170,7 @@ var _ = Describe("AgentWorkflowRun Controller", func() {
 
 			By("verifying stage-a AgentRun has correct labels")
 			Expect(stageARun.Labels).To(HaveKeyWithValue(labelAgentWorkflowRun, pbRunName))
-			Expect(stageARun.Labels).To(HaveKeyWithValue(labelStage, "stage-a"))
+			Expect(stageARun.Labels).To(HaveKeyWithValue(labelStage, stageAName))
 
 			By("verifying stage-b is not started yet")
 			var fetchedPBRun konveyoriov1alpha1.AgentWorkflowRun
@@ -291,7 +292,7 @@ var _ = Describe("AgentWorkflowRun Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{Name: workflowName, Namespace: testNamespace},
 				Spec: konveyoriov1alpha1.AgentWorkflowSpec{
 					Stages: []konveyoriov1alpha1.AgentWorkflowStage{
-						{Name: "stage-a", AgentRef: agentAName},
+						{Name: stageAName, AgentRef: agentAName},
 						{Name: "stage-b", AgentRef: agentBName},
 					},
 				},
@@ -315,7 +316,7 @@ var _ = Describe("AgentWorkflowRun Controller", func() {
 
 			By("verifying stage-a AgentRun gets only 'source_url'")
 			pbRunKey := types.NamespacedName{Name: pbRunName, Namespace: testNamespace}
-			expectedStageAName := stageAgentRunName(pbRunName, "stage-a")
+			expectedStageAName := stageAgentRunName(pbRunName, stageAName)
 			Eventually(func(g Gomega) {
 				var fetched konveyoriov1alpha1.AgentWorkflowRun
 				g.Expect(k8sClient.Get(ctx, pbRunKey, &fetched)).To(Succeed())
@@ -401,7 +402,7 @@ var _ = Describe("AgentWorkflowRun Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{Name: workflowName, Namespace: testNamespace},
 				Spec: konveyoriov1alpha1.AgentWorkflowSpec{
 					Stages: []konveyoriov1alpha1.AgentWorkflowStage{
-						{Name: "stage-a", AgentRef: agentName, Instructions: "Do stage A"},
+						{Name: stageAName, AgentRef: agentName, Instructions: "Do stage A"},
 					},
 				},
 			}
@@ -430,7 +431,7 @@ var _ = Describe("AgentWorkflowRun Controller", func() {
 
 			By("waiting for the stage AgentRun to be created")
 			pbRunKey := types.NamespacedName{Name: pbRunName, Namespace: testNamespace}
-			expectedStageName := stageAgentRunName(pbRunName, "stage-a")
+			expectedStageName := stageAgentRunName(pbRunName, stageAName)
 			Eventually(func(g Gomega) {
 				var fetched konveyoriov1alpha1.AgentWorkflowRun
 				g.Expect(k8sClient.Get(ctx, pbRunKey, &fetched)).To(Succeed())
@@ -449,7 +450,7 @@ var _ = Describe("AgentWorkflowRun Controller", func() {
 			By("verifying controller-owned keys keep controller values")
 			Expect(stageRun.Labels).To(HaveKeyWithValue(labelManagedBy, managedByLabel))
 			Expect(stageRun.Labels).To(HaveKeyWithValue(labelAgentWorkflowRun, pbRunName))
-			Expect(stageRun.Labels).To(HaveKeyWithValue(labelStage, "stage-a"))
+			Expect(stageRun.Labels).To(HaveKeyWithValue(labelStage, stageAName))
 
 			By("cleaning up")
 			var runList konveyoriov1alpha1.AgentRunList

@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	"strings"
 
@@ -392,9 +393,7 @@ func (r *AgentWorkflowRunReconciler) createAgentRunForStage(
 	// written last into a copy so callers cannot override them and the
 	// parent's live label map is never mutated.
 	labels := make(map[string]string, len(pbRun.Labels)+3)
-	for k, v := range pbRun.Labels {
-		labels[k] = v
-	}
+	maps.Copy(labels, pbRun.Labels)
 	labels[labelManagedBy] = managedByLabel
 	labels[labelAgentWorkflowRun] = pbRun.Name
 	labels[labelStage] = stage.Name
