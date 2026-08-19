@@ -1,0 +1,11 @@
+kind: bugfix
+
+description: >
+  AgentRun now reports whether the agent ACP endpoint accepts connections
+  as a dedicated ACPReady condition (True once the sandbox pod passes a new
+  tcpSocket:4000 readiness probe and the sandbox Service exists; reasons
+  Listening, NotListening, Finished), and phase=Running now means the
+  sandbox pod is running rather than that the Sandbox object exists.
+  Previously Running was set before the pod was even scheduled and nothing
+  told clients when :4000 would accept, so every client that dialed on
+  Running hit a refused socket and had to retry.

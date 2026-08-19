@@ -2,7 +2,8 @@
 #
 # This is a minimal buildable image for testing the controller plumbing.
 # It includes basic tools (curl, git) needed by the Gateway
-# verification Job and the harness entrypoint stub.
+# verification Job and the harness entrypoint stub, plus python3 so the
+# stub can serve the pod's ACP port the way a real agent does.
 #
 # The full harness binary, skillctl, and runtime tooling will be added
 # as the harness implementation matures.
@@ -10,7 +11,7 @@
 
 FROM registry.access.redhat.com/ubi10/ubi-minimal:latest
 
-RUN microdnf install -y git tar curl-minimal && microdnf clean all
+RUN microdnf install -y git tar curl-minimal python3 && microdnf clean all
 
 # Create directories used by the controller and harness.
 RUN mkdir -p /opt/skills /workspace /.konveyor

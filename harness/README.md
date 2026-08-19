@@ -187,8 +187,10 @@ burn.
 **Fault containment.** The tee can never fail the run: bounded
 per-viewer queues (slow viewers are dropped), ping/pong keepalive so
 half-open viewers release their goose connection, panics recovered per
-connection, and a listener failure only costs live viewing. `/healthz`
-stays unauthenticated. `HARNESS_ACP_TEE=off` restores goose owning
+connection, and a listener failure only costs live viewing — plus, since
+the controller's pod readiness probe targets `:4000`, a run whose
+listener never binds keeps its `ACPReady` condition False (reason
+`NotListening`) for its whole life. `/healthz` stays unauthenticated. `HARNESS_ACP_TEE=off` restores goose owning
 `:4000` directly.
 
 ### Key design decisions

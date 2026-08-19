@@ -32,6 +32,17 @@ const (
 	AgentRunPhaseFailed    AgentRunPhase = "Failed"
 )
 
+// AgentRun condition types (status.conditions[].type).
+const (
+	// AgentRunConditionACPReady is True once the agent's ACP endpoint
+	// accepts connections: the sandbox pod passes its tcpSocket:4000
+	// readiness probe and the sandbox Service exists. It is the signal to
+	// dial <sandboxName>.<namespace>.svc:4000 on — not Phase, which only
+	// says the agent process is executing. Reasons: Listening,
+	// NotListening, Finished.
+	AgentRunConditionACPReady = "ACPReady"
+)
+
 // AgentRunParam supplies a value for a declared Agent parameter.
 type AgentRunParam struct {
 	// Name is the parameter name, matching an Agent param declaration.
@@ -81,7 +92,11 @@ type AgentRunSpec struct {
 
 // AgentRunStatus defines the observed state of an AgentRun.
 type AgentRunStatus struct {
-	// Phase is the current phase of the AgentRun.
+	// Phase is the current phase of the AgentRun. Running means the sandbox
+	// pod is running (the agent process is executing); it says nothing about
+	// whether the agent's ACP endpoint accepts connections yet — that is the
+	// ACPReady condition. A run whose pod finishes before the controller
+	// observes it running may go straight from Pending to a terminal phase.
 	// +kubebuilder:default=Pending
 	// +optional
 	Phase AgentRunPhase `json:"phase,omitempty"`
@@ -94,7 +109,8 @@ type AgentRunStatus struct {
 	// +optional
 	SandboxName string `json:"sandboxName,omitempty"`
 
-	// StartTime is the time the Sandbox started running.
+	// StartTime is the time the sandbox pod started running (the Sandbox
+	// creation time if the pod finished before the controller saw it run).
 	// +optional
 	StartTime *metav1.Time `json:"startTime,omitempty"`
 
@@ -113,7 +129,10 @@ type AgentRunStatus struct {
 	SecretKeyRef *corev1.LocalObjectReference `json:"secretKeyRef,omitempty"`
 
 	// Conditions represent the latest available observations of the
-	// AgentRun's state.
+	// AgentRun's state. Ready tracks the run's overall outcome (False
+	// while in progress with the current step as its reason, True on
+	// success); ACPReady tracks whether the agent's ACP endpoint accepts
+	// connections (see AgentRunConditionACPReady).
 	// +optional
 	// +listType=map
 	// +listMapKey=type

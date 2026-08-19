@@ -30,12 +30,18 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	sandboxv1beta1 "sigs.k8s.io/agent-sandbox/api/v1beta1"
@@ -46,6 +52,18 @@ import (
 const (
 	// secretKeyLength is the length of the generated ACP secret key in bytes.
 	secretKeyLength = 32
+
+	// acpPort is the port every agent image serves ACP on inside the sandbox
+	// pod (the harness tee, or goose serve directly). Clients reach it as
+	// <sandbox>.<namespace>.svc:4000.
+	acpPort     int32 = 4000
+	acpPortName       = "acp"
+
+	// acpProbePeriodSeconds paces the ACP readiness probe. Readiness only
+	// gates the pod's Ready condition (and so phase=Running); it never
+	// restarts the container, so a run that dies before listening still
+	// ends through the pod's terminal phase.
+	acpProbePeriodSeconds int32 = 2
 
 	// workspaceVolumeName is the name of the EmptyDir volume for the agent workspace.
 	workspaceVolumeName = "workspace"
@@ -71,6 +89,7 @@ type AgentRunReconciler struct {
 // +kubebuilder:rbac:groups=konveyor.io,resources=agentruns/finalizers,verbs=update
 // +kubebuilder:rbac:groups=agents.x-k8s.io,resources=sandboxes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 
 // Reconcile handles AgentRun reconciliation.
 //
@@ -205,8 +224,19 @@ func (r *AgentRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 
-	// Update AgentRun phase from Sandbox conditions.
-	r.updatePhaseFromSandbox(&run, &sandbox)
+	// The sandbox pod (Agent Sandbox names it after the Sandbox) tells us
+	// whether the agent process is executing; its absence just means "not
+	// yet".
+	var pod *corev1.Pod
+	var p corev1.Pod
+	if err := r.Get(ctx, sandboxKey, &p); err == nil {
+		pod = &p
+	} else if !errors.IsNotFound(err) {
+		return ctrl.Result{}, err
+	}
+
+	// Update AgentRun phase and ACP readiness from the Sandbox and its pod.
+	r.updatePhaseFromSandbox(&run, &sandbox, pod)
 
 	return r.patchRunStatus(ctx, &run, original)
 }
@@ -398,6 +428,25 @@ func (r *AgentRunReconciler) createSandbox(
 							// credentials.
 							EnvFrom:      append(envFrom, run.Spec.EnvFrom...),
 							VolumeMounts: volumeMounts,
+							Ports: []corev1.ContainerPort{{
+								Name:          acpPortName,
+								ContainerPort: acpPort,
+								Protocol:      corev1.ProtocolTCP,
+							}},
+							// The agent process binds the ACP port only once
+							// it can serve (the harness starts goose, waits
+							// for it, then listens), so an accepting socket
+							// IS readiness. Without this probe the pod is
+							// Ready the instant the process starts and
+							// clients dial into a not-yet-listening port.
+							ReadinessProbe: &corev1.Probe{
+								ProbeHandler: corev1.ProbeHandler{
+									TCPSocket: &corev1.TCPSocketAction{
+										Port: intstr.FromInt32(acpPort),
+									},
+								},
+								PeriodSeconds: acpProbePeriodSeconds,
+							},
 						},
 					},
 					Volumes: volumes,
@@ -610,20 +659,41 @@ func (r *AgentRunReconciler) resolveSkillVolumes(
 	return volumes, mounts, nil
 }
 
-// updatePhaseFromSandbox updates the AgentRun phase based on the Sandbox status.
+// updatePhaseFromSandbox updates the AgentRun phase and ACPReady condition
+// from the Sandbox, its pod, and the Sandbox's Ready condition.
+//
+// Phase follows the agent process: Pending until the sandbox pod is Running,
+// then Running (one-way), then Succeeded/Failed when the Sandbox reports
+// Finished. Whether the agent's ACP endpoint accepts connections is a
+// separate fact — the sandbox pod's tcpSocket:4000 readiness probe feeding
+// the Sandbox Ready condition — and is reported as the ACPReady condition,
+// so a client dials on ACPReady=True, never on Phase.
 func (r *AgentRunReconciler) updatePhaseFromSandbox(
 	run *konveyoriov1alpha1.AgentRun,
 	sandbox *sandboxv1beta1.Sandbox,
+	pod *corev1.Pod,
 ) {
 	// Check Sandbox conditions for Finished state.
 	for _, cond := range sandbox.Status.Conditions {
 		if cond.Type == "Finished" && cond.Status == metav1.ConditionTrue {
 			now := metav1.Now()
 			run.Status.CompletionTime = &now
-			if run.Status.StartTime != nil {
-				duration := int64(now.Sub(run.Status.StartTime.Time).Seconds())
-				run.Status.Duration = &duration
+			if run.Status.StartTime == nil {
+				// Finished before we ever saw the pod running: the pod's
+				// own start, else the Sandbox creation, so Duration still
+				// reflects the run's wall time.
+				start := podStartTime(pod, sandbox.CreationTimestamp)
+				run.Status.StartTime = &start
 			}
+			duration := int64(now.Sub(run.Status.StartTime.Time).Seconds())
+			run.Status.Duration = &duration
+			meta.SetStatusCondition(&run.Status.Conditions, metav1.Condition{
+				Type:               konveyoriov1alpha1.AgentRunConditionACPReady,
+				Status:             metav1.ConditionFalse,
+				ObservedGeneration: run.Generation,
+				Reason:             "Finished",
+				Message:            "The run has finished; its ACP endpoint is gone",
+			})
 
 			if cond.Reason == sandboxFinishedReasonSucceeded {
 				run.Status.Phase = konveyoriov1alpha1.AgentRunPhaseSucceeded
@@ -648,19 +718,73 @@ func (r *AgentRunReconciler) updatePhaseFromSandbox(
 		}
 	}
 
-	// Sandbox is still running.
-	if run.Status.Phase != konveyoriov1alpha1.AgentRunPhaseRunning {
-		run.Status.Phase = konveyoriov1alpha1.AgentRunPhaseRunning
-		now := metav1.Now()
-		run.Status.StartTime = &now
+	// ACP readiness: the Sandbox is Ready once its pod passes readiness (the
+	// agent container's ACP tcpSocket probe) and its headless Service exists.
+	acpReady := metav1.Condition{
+		Type:               konveyoriov1alpha1.AgentRunConditionACPReady,
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: run.Generation,
+		Reason:             "NotListening",
+		Message:            fmt.Sprintf("Waiting for Sandbox %q to become Ready", sandbox.Name),
+	}
+	if ready := meta.FindStatusCondition(sandbox.Status.Conditions,
+		string(sandboxv1beta1.SandboxConditionReady)); ready != nil && ready.Status == metav1.ConditionTrue {
+		acpReady.Status = metav1.ConditionTrue
+		acpReady.Reason = "Listening"
+		acpReady.Message = fmt.Sprintf("ACP endpoint %s.%s.svc:%d accepts connections",
+			sandbox.Name, sandbox.Namespace, acpPort)
+	} else if ready != nil && ready.Message != "" {
+		acpReady.Message = fmt.Sprintf("%s: %s", acpReady.Message, ready.Message)
+	}
+	meta.SetStatusCondition(&run.Status.Conditions, acpReady)
+
+	// Phase: Running once the agent process is executing, i.e. the sandbox
+	// pod is Running. One-way — a later pod state change does not regress
+	// a Running run.
+	if run.Status.Phase == konveyoriov1alpha1.AgentRunPhaseRunning {
+		return
+	}
+	if pod == nil || pod.Status.Phase != corev1.PodRunning {
+		run.Status.Phase = konveyoriov1alpha1.AgentRunPhasePending
+		podPhase := "not created yet"
+		if pod != nil {
+			podPhase = string(pod.Status.Phase)
+		}
 		meta.SetStatusCondition(&run.Status.Conditions, metav1.Condition{
 			Type:               ConditionTypeReady,
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: run.Generation,
-			Reason:             "Running",
-			Message:            "Agent is running",
+			Reason:             "PodNotRunning",
+			Message:            fmt.Sprintf("Waiting for sandbox pod %q to run (%s)", sandbox.Name, podPhase),
 		})
+		return
 	}
+	run.Status.Phase = konveyoriov1alpha1.AgentRunPhaseRunning
+	start := podStartTime(pod, sandbox.CreationTimestamp)
+	run.Status.StartTime = &start
+	meta.SetStatusCondition(&run.Status.Conditions, metav1.Condition{
+		Type:               ConditionTypeReady,
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: run.Generation,
+		Reason:             "Running",
+		Message:            "Agent is running",
+	})
+}
+
+// podStartTime is when the agent container started running, else when the
+// pod was accepted, else the given fallback.
+func podStartTime(pod *corev1.Pod, fallback metav1.Time) metav1.Time {
+	if pod != nil {
+		for _, cs := range pod.Status.ContainerStatuses {
+			if cs.State.Running != nil && !cs.State.Running.StartedAt.IsZero() {
+				return cs.State.Running.StartedAt
+			}
+		}
+		if pod.Status.StartTime != nil {
+			return *pod.Status.StartTime
+		}
+	}
+	return fallback
 }
 
 // patchRunStatus patches the AgentRun status.
@@ -710,8 +834,47 @@ func (r *AgentRunReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&konveyoriov1alpha1.Agent{},
 			handler.EnqueueRequestsFromMapFunc(r.findRunsForAgent),
 		).
+		// Sandbox pods carry the run's name as a label (set on the Sandbox
+		// PodTemplate); their phase drives Running, and the manager's cache
+		// is restricted to labeled pods (see SandboxPodCacheOptions).
+		Watches(
+			&corev1.Pod{},
+			handler.EnqueueRequestsFromMapFunc(runForSandboxPod),
+			builder.WithPredicates(predicate.NewPredicateFuncs(isSandboxPod)),
+		).
 		Named("agentrun").
 		Complete(r)
+}
+
+// isSandboxPod reports whether obj is a sandbox pod created for an AgentRun.
+func isSandboxPod(obj client.Object) bool {
+	_, ok := obj.GetLabels()[labelAgentRun]
+	return ok
+}
+
+// runForSandboxPod maps a sandbox pod to the AgentRun it belongs to.
+func runForSandboxPod(_ context.Context, obj client.Object) []reconcile.Request {
+	name, ok := obj.GetLabels()[labelAgentRun]
+	if !ok {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{
+		Namespace: obj.GetNamespace(),
+		Name:      name,
+	}}}
+}
+
+// SandboxPodCacheOptions restricts the manager's Pod cache to sandbox pods,
+// so watching Pods for AgentRun readiness does not mean caching every pod
+// in the cluster.
+func SandboxPodCacheOptions() map[client.Object]cache.ByObject {
+	req, err := labels.NewRequirement(labelAgentRun, selection.Exists, nil)
+	if err != nil {
+		panic(err) // static input; cannot fail
+	}
+	return map[client.Object]cache.ByObject{
+		&corev1.Pod{}: {Label: labels.NewSelector().Add(*req)},
+	}
 }
 
 // findRunsForAgent returns reconcile requests for all non-terminal AgentRuns

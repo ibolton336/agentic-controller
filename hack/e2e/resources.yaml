@@ -5,7 +5,8 @@
 #   Secret → Gateway → SkillCard → Agent → AgentRun → Sandbox
 #
 # The AgentRun uses the agentic-controller-agent image which logs
-# params/skills/instructions and exits 0, proving the full pipeline.
+# params/skills/instructions, then serves the pod's ACP port (:4000)
+# like a real agent, proving the pipeline and the ACPReady contract.
 
 # Dummy LLM credential Secret (not a real API key).
 apiVersion: v1
@@ -75,6 +76,12 @@ metadata:
 spec:
   agentRef: e2e-agent
   gateway: e2e-gateway
+  env:
+    # Stretch the stub's startup gap (process up, ACP port not yet bound)
+    # so run-e2e.sh can observe phase=Running with ACPReady=False until
+    # the agent actually listens.
+    - name: STUB_ACP_DELAY_SECONDS
+      value: "12"
   params:
     - name: source_url
       value: "https://github.com/konveyor/example-app.git"

@@ -110,12 +110,16 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 make install
 make kustomize
 bin/kustomize build "${SCRIPT_DIR}/e2e" | kubectl apply -f -
+# On a reused cluster the Deployment is unchanged (same image tag), so the
+# running manager would keep the previous binary; restart so the freshly
+# loaded image is what gets tested.
+kubectl rollout restart deployment/agentic-controller-controller-manager \
+    --namespace agentic-controller-system
 
 echo ""
 echo "=== Waiting for controller ==="
-kubectl wait deployment/agentic-controller-controller-manager \
+kubectl rollout status deployment/agentic-controller-controller-manager \
     --namespace agentic-controller-system \
-    --for=condition=Available \
     --timeout=120s
 
 echo ""
