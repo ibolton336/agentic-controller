@@ -345,7 +345,7 @@ func runStage(cmd *cobra.Command, args []string) error {
 		logging.Err("prompt failed: %s", red.redact(err.Error()))
 	}
 	if promptResult != nil && logAgentClosingMessage(promptResult, red) {
-		emitNotice("agent ended on a provider error — the model call failed; see the pod log")
+		emitNotice("agent ended on goose's provider-error text — the model call may have failed; see the pod log")
 	}
 	emitPlan("completed", "completed", "in_progress")
 
@@ -587,8 +587,8 @@ func logAgentClosingMessage(r *acp.PromptResult, red *redactor) (providerError b
 		msg = string(runes[:closingMessageLimit]) + fmt.Sprintf("… [truncated, %d bytes total]", len(full))
 	}
 	if r.ClosingProviderError() {
-		logging.Warn("agent closing message is goose's provider-error text "+
-			"(the model call failed or was refused; goose ended the turn normally):\n%s", msg)
+		logging.Warn("agent closing message matches goose's provider-error text "+
+			"(the model call may have failed or been refused; goose ended the turn normally):\n%s", msg)
 		return true
 	}
 	logging.Info("agent closing message:\n%s", msg)

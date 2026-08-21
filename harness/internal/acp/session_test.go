@@ -677,6 +677,12 @@ func TestLooksLikeProviderError(t *testing.T) {
 			t.Errorf("expected provider error: %q", s)
 		}
 	}
+	// Streamed text followed by the failure in the same entry (no message
+	// id separated them): the failure starts a line.
+	yes = append(yes, "Here is the plan:\n1. Update pom.xml\nRan into this error: ThrottlingException.\n\nPlease retry if you think this is a transient or recoverable error.")
+	if !LooksLikeProviderError(yes[len(yes)-1]) {
+		t.Errorf("expected provider error after streamed text: %q", yes[len(yes)-1])
+	}
 	no := []string{
 		"Tell me something.",
 		"Done — committed 3 files.",

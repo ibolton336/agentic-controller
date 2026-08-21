@@ -272,20 +272,26 @@ var (
 	}
 )
 
-// LooksLikeProviderError reports whether one agent message is one of
-// goose's provider-failure messages. A turn ending on one never reached
-// the model, or lost it mid-way, yet from the outside it looks like an
-// ordinary end of turn.
+// LooksLikeProviderError reports whether one agent message is, or ends
+// with, one of goose's provider-failure messages. A turn ending on one
+// never reached the model, or lost it mid-way, yet from the outside it
+// looks like an ordinary end of turn. goose emits the failure as its own
+// message, but text it had already streamed can precede it in the same
+// entry when no message id separates them, so prefixes are also checked
+// at the start of each line.
 func LooksLikeProviderError(text string) bool {
 	t := strings.TrimSpace(text)
-	for _, m := range providerErrorPrefixes {
-		if strings.HasPrefix(t, m) {
-			return true
-		}
-	}
 	for _, m := range providerErrorSuffixes {
 		if strings.HasSuffix(t, m) {
 			return true
+		}
+	}
+	for line := range strings.SplitSeq(t, "\n") {
+		line = strings.TrimSpace(line)
+		for _, m := range providerErrorPrefixes {
+			if strings.HasPrefix(line, m) {
+				return true
+			}
 		}
 	}
 	return false
