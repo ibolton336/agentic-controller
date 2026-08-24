@@ -93,13 +93,42 @@ attaching mid-question is replayed the pending ask: questions wait
 minutes, and the harness status ring (full-state snapshots) would not
 carry them.
 
-### 5. Every unanswered path fails closed, and nobody answers for the human
+### 5. Every unanswered path fails closed by failing the run
 
 No viewer, no tee, or no answer within `HARNESS_HITL_TIMEOUT_SECONDS` →
-`{action: "cancel"}`, and the model is told no human answered. This is
-the same policy already settled for permission asks: an ask that
-self-approves on a timer is no ask at all. Answers are relayed verbatim;
-the harness never composes one.
+`{action: "cancel"}` (an ask that self-approves on a timer is no ask at
+all), **and the harness fails the run**: it stops the turn and exits
+non-zero. Telling the model "nobody answered" is not enough on its own —
+the model reads that and steamrolls a guess (observed live: a migration
+run that asked how to proceed, got no answer, and answered itself with
+"since no one is available… I'll proceed"). The agent called `ask_user`
+precisely because this was a decision only a human could make, so
+proceeding without one is the fail-open the gate exists to prevent.
+
+Mechanically this is a two-step because goose parks the turn on the
+elicitation reply with no timeout of its own and `session/cancel` cannot
+unpark it: the harness first sends the `cancel` action (the only key that
+unparks the turn), then fires `session/cancel` on the run connection to
+stop the now-running turn before the model emits more than a token or
+two. `runStage` reads a latched flag afterward and reports the run failed
+with a HITL-specific reason regardless of the stop reason goose returns.
+Answers are relayed verbatim; the harness never composes one.
+
+`HARNESS_HITL_ASK=off` (the tool absent) is how a run opts out of
+blocking questions entirely; there is no "ask but proceed on timeout"
+middle mode by design — that is the behavior this decision rejects.
+
+### 5a. Concluding an ask closes the viewer card
+
+When an ask resolves — answered, timed out, or cancelled — the tee
+broadcasts a JSON-RPC response keyed by the same `kask-<n>`/`kperm-<n>`
+id every viewer received the request under: the answering viewer's result
+on an answer (so *other* viewers see what was chosen), the method's
+cancel body otherwise. A console keys its open question/permission card
+by that id and closes it on the matching response; without this a card
+left after a timeout, or after another viewer answered, strands in its
+answer/decline state forever. Broadcast-only — it never travels the run
+connection, so the tee's "never affect the run" invariant holds.
 
 ### 6. The prompt guideline ships with the tool
 
@@ -143,13 +172,17 @@ write on the stream at all is the Hub's authorization question
   (`TestAskUserBlocksLiveRun`, goose 1.45 + Bedrock): the question
   reached the viewer as `kask-1` with the enum schema, the run stayed
   parked until "postgres" was chosen, and the final answer named it.
-- Headless and unattended runs are unchanged in character: the tool
-  degrades to "nobody answered" instead of hanging or auto-approving.
+- Headless and unattended runs no longer proceed past a question: an
+  `ask_user` call with nobody to answer fails the run (fail closed)
+  instead of degrading to a guess. A run that must complete unattended
+  sets `HARNESS_HITL_ASK=off`.
+- The console must handle the resolution frame (Decision 5a) to close its
+  cards — a companion change in tackle2-ui alongside the card renderer.
 - Viewers receive a form-renderable schema, so consoles can show a real
   question card rather than parsing prose.
-- Known follow-ups, deliberately not blocking: other viewers' cards do
-  not learn when someone else answered (the tee could broadcast a
-  resolution frame); questions share the permission timeout and probably
-  want their own, longer default.
+- Known follow-ups, deliberately not blocking: questions share the
+  permission timeout and probably want their own, longer default; an
+  operator that wants "ask, but fall back to a headless policy on
+  timeout" would need a new opt-in mode (explicitly rejected here).
 - Adding an agent runtime now has a concrete acceptance checklist
   (Decision 3) instead of a rediscovery exercise.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/konveyor/migration-harness/internal/logging"
 )
@@ -16,6 +17,14 @@ type SessionClient struct {
 
 	fwdMu     sync.Mutex
 	forwarder PermissionForwarder
+
+	// sessionID is the run session, stored so an unanswered HITL question
+	// can cancel the turn from the agent-request goroutine. Written once in
+	// CreateSession (before any prompt), read on elicitation timeout.
+	sessionID atomic.Value // string
+	// hitlUnanswered latches when an ask_user question went unanswered, so
+	// runStage fails the run instead of letting the model guess past it.
+	hitlUnanswered atomic.Bool
 }
 
 // NewSessionClient creates a session client from an existing WebSocket
@@ -222,12 +231,39 @@ func (c *SessionClient) CreateSession(ctx context.Context, cwd string, mcpServer
 		return "", fmt.Errorf("session/new: no session ID received")
 	}
 
+	c.sessionID.Store(sessionID)
+
 	preview := sessionID
 	if len(preview) > 8 {
 		preview = preview[:8] + "..."
 	}
 	logging.Ok("ACP session created: %s", preview)
 	return sessionID, nil
+}
+
+// HITLGateUnanswered reports whether the run raised an ask_user question
+// that no human answered. The harness treats that as a terminal failure:
+// the agent explicitly asked for a decision it could not make alone, so a
+// run that proceeds anyway is exactly the fail-open the gate exists to
+// prevent. Read by runStage once the prompt returns.
+func (c *SessionClient) HITLGateUnanswered() bool {
+	return c.hitlUnanswered.Load()
+}
+
+// cancelTurn stops the active run turn. Fired after an unanswered
+// elicitation is cancelled: goose parks the turn on the elicitation reply
+// with no timeout of its own and session/cancel cannot unpark it — the
+// cancel action is the only key — so this must run only after the cancel
+// response has been sent, when the turn is running again and can be
+// stopped before the model steamrolls a guess.
+func (c *SessionClient) cancelTurn() {
+	sid, _ := c.sessionID.Load().(string)
+	if sid == "" {
+		return
+	}
+	if err := c.ws.Notify("session/cancel", map[string]any{"sessionId": sid}); err != nil {
+		logging.Warn("cancel turn after unanswered HITL question: %v", err)
+	}
 }
 
 // ContentBlock is a content item in a prompt.
@@ -418,11 +454,14 @@ func (c *SessionClient) answerAgentRequest(msg *RPCResponse) {
 }
 
 // answerElicitation handles the agent asking the human a question
-// (elicitation/create — from the harness's ask_user tool or any MCP server
-// the session mounts). Offered to attached viewers first; with nobody
-// there, or nobody answering in time, the ask is cancelled — goose reports
-// that back to the tool, which tells the model no human answered. Never
-// answered on the human's behalf.
+// (elicitation/create — from the harness's ask_user tool, the only
+// elicitation source, mounted only when HITL asking is enabled). Offered to
+// attached viewers first; a human's answer rides back verbatim. With nobody
+// there, or nobody answering in time, the ask is a HITL gate the agent
+// explicitly opened and cannot clear alone: the harness cancels the ask AND
+// fails the run — it stops the turn (fail closed) rather than let the model
+// read "nobody answered" and steamroll a guess. Never answered on the
+// human's behalf.
 func (c *SessionClient) answerElicitation(msg *RPCResponse) {
 	id := msg.ID
 	var params struct {
@@ -446,16 +485,22 @@ func (c *SessionClient) answerElicitation(msg *RPCResponse) {
 			}
 			return
 		case ForwardTimeout:
-			logging.Warn("question %q unanswered by viewer — cancelling (fail closed)", title)
+			logging.Warn("question %q unanswered by viewer — cancelling and failing the run (HITL gate)", title)
 		case ForwardNoViewers:
-			// fall through to the headless cancel
+			logging.Warn("question %q — no viewer to answer, cancelling and failing the run (HITL gate)", title)
 		}
+	} else {
+		logging.Warn("agent asked %q — no HITL relay, cancelling and failing the run", title)
 	}
 
-	logging.Warn("agent asked %q — headless harness cancels it (no human to answer)", title)
+	// Latch the failure before unparking goose, then send the cancel action
+	// (the only thing that unparks the turn) and stop the now-running turn
+	// so the model cannot proceed on an unanswered gate.
+	c.hitlUnanswered.Store(true)
 	if err := c.ws.SendResponse(id, map[string]any{"action": "cancel"}, nil); err != nil {
 		logging.Warn("reply to elicitation: %v", err)
 	}
+	c.cancelTurn()
 }
 
 func extractSessionIDFromNotifications(notifications []*RPCResponse) string {

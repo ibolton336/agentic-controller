@@ -1004,3 +1004,84 @@ func TestResolveAskClearsPendingFrameWithAnswer(t *testing.T) {
 		t.Fatal("answer never delivered to the waiting forwardAsk")
 	}
 }
+
+// When an ask concludes, the tee broadcasts a resolution frame keyed by
+// the ask id so a viewer's question/permission card closes instead of
+// stranding in its answer/decline state: a cancel body on timeout, and the
+// chosen answer for the OTHER viewers when one of them answered.
+func TestAskResolutionClosesCard(t *testing.T) {
+	params := json.RawMessage(`{"sessionId":"s1","message":"Which database?","requestedSchema":{"type":"object"}}`)
+
+	t.Run("timeout emits a cancel resolution", func(t *testing.T) {
+		_, _, s := startTee(t, Config{HITLTimeout: 200 * time.Millisecond})
+		v, err := dialViewer(t, s, testKey)
+		if err != nil {
+			t.Fatalf("viewer dial: %v", err)
+		}
+		go s.ForwardElicitation(params)
+
+		ask := v.expect("forwarded question", func(f string) bool { return strings.Contains(f, "kask-") })
+		id := frameID(t, ask)
+
+		res := v.expect("resolution frame", func(f string) bool { return isResolution(f, id) })
+		if !strings.Contains(res, `"cancel"`) {
+			t.Fatalf("timeout resolution should carry cancel: %s", res)
+		}
+	})
+
+	t.Run("an answer resolves the card for other viewers", func(t *testing.T) {
+		_, _, s := startTee(t, Config{HITLTimeout: 5 * time.Second})
+		a, err := dialViewer(t, s, testKey)
+		if err != nil {
+			t.Fatalf("viewer A dial: %v", err)
+		}
+		b, err := dialViewer(t, s, testKey)
+		if err != nil {
+			t.Fatalf("viewer B dial: %v", err)
+		}
+		done := make(chan struct{})
+		go func() { s.ForwardElicitation(params); close(done) }()
+
+		ask := a.expect("A sees question", func(f string) bool { return strings.Contains(f, "kask-") })
+		id := frameID(t, ask)
+		b.expect("B sees question", func(f string) bool { return strings.Contains(f, id) })
+
+		answer := fmt.Sprintf(`{"jsonrpc":"2.0","id":%q,"result":{"action":"accept","content":{"answer":"postgres"}}}`, id)
+		if err := a.conn.WriteMessage(websocket.TextMessage, []byte(answer)); err != nil {
+			t.Fatalf("answer write: %v", err)
+		}
+		<-done
+
+		res := b.expect("B sees resolution", func(f string) bool { return isResolution(f, id) })
+		if !strings.Contains(res, `"postgres"`) {
+			t.Fatalf("answered resolution should carry the chosen answer: %s", res)
+		}
+	})
+}
+
+// frameID extracts a string JSON-RPC id from a frame, failing the test if
+// absent.
+func frameID(t *testing.T, frame string) string {
+	t.Helper()
+	var f struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(frame), &f); err != nil || f.ID == "" {
+		t.Fatalf("no id in frame: %s (%v)", frame, err)
+	}
+	return f.ID
+}
+
+// isResolution reports whether frame is a JSON-RPC response (no method,
+// has a result) keyed by id — the shape emitAskResolution broadcasts.
+func isResolution(frame, id string) bool {
+	var f struct {
+		ID     string          `json:"id"`
+		Method string          `json:"method"`
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(frame), &f); err != nil {
+		return false
+	}
+	return f.Method == "" && f.ID == id && len(f.Result) > 0
+}

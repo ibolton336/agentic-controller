@@ -431,11 +431,54 @@ func (s *Server) forwardAsk(prefix, method string, params json.RawMessage) (json
 	case result := <-ch:
 		return result, acp.ForwardAnswered
 	case <-s.done:
+		// Shutdown races viewer teardown, but a resolution frame that
+		// reaches a still-attached viewer closes a card it would otherwise
+		// be left staring at.
+		s.emitAskResolution(id, cancelResult(prefix))
 		return nil, acp.ForwardNoViewers
 	case <-timer.C:
 		s.responsive.Store(false)
+		// Close the card everywhere: it has been offered to viewers, and
+		// without this it stays in the "answer/decline" state forever even
+		// though the ask is over.
+		s.emitAskResolution(id, cancelResult(prefix))
 		return nil, acp.ForwardTimeout
 	}
+}
+
+// cancelResult is the JSON-RPC result body a timed-out or shutdown ask
+// resolves to, in the shape the ask's own method uses: elicitation carries
+// {"action":"cancel"} (what the run connection also hands goose), a
+// permission request carries a cancelled outcome.
+func cancelResult(prefix string) json.RawMessage {
+	if prefix == "kask" {
+		return json.RawMessage(`{"action":"cancel"}`)
+	}
+	return json.RawMessage(`{"outcome":{"outcome":"cancelled"}}`)
+}
+
+// emitAskResolution tells every attached viewer that the ask under id is no
+// longer open, so a question/permission card is closed instead of stranded
+// in its answer/decline state. It is a JSON-RPC response keyed by the same
+// kask-<n>/kperm-<n> id the viewers received the request under: an answered
+// ask carries the answering viewer's own result (so other viewers see what
+// was chosen); a timed-out, cancelled, or shutdown ask carries the
+// method's cancel body. Broadcast-only — it never travels the run
+// connection, so the tee's "never affect the run" invariant holds.
+func (s *Server) emitAskResolution(id string, result json.RawMessage) {
+	if len(result) == 0 {
+		result = json.RawMessage("null")
+	}
+	frame, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"result":  result,
+	})
+	if err != nil {
+		logging.Warn("tee: marshal ask resolution %s: %v", id, err)
+		return
+	}
+	s.broadcast(frame)
 }
 
 // ---------------------------------------------------------------- viewers
@@ -896,6 +939,10 @@ func (s *Server) resolveAsk(id string, result json.RawMessage) {
 		return
 	}
 	ch <- result // cap 1; sole sender after map removal
+	// Close the card for every other viewer that received the same ask —
+	// the one that answered already knows, but the rest are still holding
+	// an open question/permission prompt.
+	s.emitAskResolution(id, result)
 }
 
 func recoverWarn(what string) {

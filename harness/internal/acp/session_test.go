@@ -324,8 +324,11 @@ const elicitAsk = `{"jsonrpc":"2.0","id":"elic-1","method":"elicitation/create",
 	`"requestedSchema":{"type":"object","properties":{"answer":{"type":"string","enum":["postgres","mysql"]}},"required":["answer"]}}}`
 
 // runElicitationScenario drives one prompt during which the agent asks
-// the human a question, and returns the harness's reply to that ask.
-func runElicitationScenario(t *testing.T, fwd PermissionForwarder) map[string]any {
+// the human a question, and returns the harness's reply to that ask plus
+// the session client (so callers can inspect the HITL-gate flag). The run
+// session id is left unset, so the unanswered-path turn cancel is a no-op
+// here — TestElicitationUnansweredCancelsTurn covers that frame separately.
+func runElicitationScenario(t *testing.T, fwd PermissionForwarder) (map[string]any, *SessionClient) {
 	t.Helper()
 	s := newDemuxServer(t)
 	c := s.dial(t)
@@ -356,7 +359,7 @@ func runElicitationScenario(t *testing.T, fwd PermissionForwarder) map[string]an
 	if got, _ := reply["id"].(string); got != "elic-1" {
 		t.Fatalf("reply to id %v, want elic-1", reply["id"])
 	}
-	return reply
+	return reply, sc
 }
 
 func elicitationAction(t *testing.T, reply map[string]any) (string, map[string]any) {
@@ -387,17 +390,21 @@ func TestMCPServerMarshalNilSlicesAsEmptyArrays(t *testing.T) {
 	}
 }
 
-// The human's answer to a question is relayed verbatim.
+// The human's answer to a question is relayed verbatim, and an answered
+// question is not a failed run.
 func TestElicitationForwardAnswered(t *testing.T) {
 	fwd := &stubForwarder{
 		result:  json.RawMessage(`{"action":"accept","content":{"answer":"postgres"}}`),
 		outcome: ForwardAnswered,
 		asked:   make(chan json.RawMessage, 1),
 	}
-	reply := runElicitationScenario(t, fwd)
+	reply, sc := runElicitationScenario(t, fwd)
 	action, content := elicitationAction(t, reply)
 	if action != "accept" || content["answer"] != "postgres" {
 		t.Fatalf("viewer answer not relayed verbatim: %s %v", action, content)
+	}
+	if sc.HITLGateUnanswered() {
+		t.Fatal("an answered question must not fail the run")
 	}
 	params := <-fwd.asked
 	if !strings.Contains(string(params), "Which database") {
@@ -405,8 +412,10 @@ func TestElicitationForwardAnswered(t *testing.T) {
 	}
 }
 
-// Nobody to answer — or nobody answering in time — cancels the question;
-// the harness never answers on the human's behalf.
+// Nobody to answer — or nobody answering in time — cancels the question
+// (the harness never answers on the human's behalf) AND fails the run: an
+// ask_user gate the agent could not clear must not let the model steamroll
+// a guess.
 func TestElicitationFailsClosed(t *testing.T) {
 	for name, fwd := range map[string]PermissionForwarder{
 		"no viewers":   &stubForwarder{outcome: ForwardNoViewers},
@@ -414,11 +423,65 @@ func TestElicitationFailsClosed(t *testing.T) {
 		"no forwarder": nil,
 	} {
 		t.Run(name, func(t *testing.T) {
-			action, _ := elicitationAction(t, runElicitationScenario(t, fwd))
+			reply, sc := runElicitationScenario(t, fwd)
+			action, _ := elicitationAction(t, reply)
 			if action != "cancel" {
 				t.Fatalf("expected cancel, got %q", action)
 			}
+			if !sc.HITLGateUnanswered() {
+				t.Fatal("an unanswered ask_user question must fail the run")
+			}
 		})
+	}
+}
+
+// An unanswered question stops the turn: after the cancel reply unparks the
+// turn (the only key that can), the harness fires session/cancel on the run
+// session so the model cannot proceed on the unanswered gate.
+func TestElicitationUnansweredCancelsTurn(t *testing.T) {
+	s := newDemuxServer(t)
+	c := s.dial(t)
+	sc := NewSessionClient(c)
+	sc.SetPermissionForwarder(&stubForwarder{outcome: ForwardTimeout})
+	// CreateSession is not run in this scripted scenario; set the run
+	// session id directly so cancelTurn has a target.
+	sc.sessionID.Store("s1")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	promptDone := make(chan error, 1)
+	go func() {
+		_, err := sc.SendPrompt(ctx, "s1", []ContentBlock{{Type: "text", Text: "go"}}, 0)
+		promptDone <- err
+	}()
+
+	promptReq := s.next()
+	promptID := int64(promptReq["id"].(float64))
+
+	s.push(elicitAsk)
+
+	// First the cancel reply to the ask (unparks the turn)...
+	reply := s.next()
+	if action, _ := elicitationAction(t, reply); action != "cancel" {
+		t.Fatalf("expected cancel reply, got %q", action)
+	}
+	// ...then session/cancel for the run session (stops the turn).
+	cancelFrame := s.next()
+	if cancelFrame["method"] != "session/cancel" {
+		t.Fatalf("expected session/cancel after unanswered ask, got %v", cancelFrame["method"])
+	}
+	params, _ := cancelFrame["params"].(map[string]any)
+	if params["sessionId"] != "s1" {
+		t.Fatalf("session/cancel targeted %v, want s1", params["sessionId"])
+	}
+
+	s.push(`{"jsonrpc":"2.0","id":` + jsonInt(promptID) + `,"result":{"stopReason":"cancelled"}}`)
+	if err := <-promptDone; err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	if !sc.HITLGateUnanswered() {
+		t.Fatal("HITL gate flag not latched")
 	}
 }
 
