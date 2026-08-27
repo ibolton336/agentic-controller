@@ -124,6 +124,7 @@ type SkillCardStatus struct {
 // +kubebuilder:resource:shortName=skc
 // +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Resolvable",type=string,JSONPath=`.status.conditions[?(@.type=="Resolvable")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // SkillCard is an individual agent capability or behavioral constraint.
