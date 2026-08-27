@@ -1,0 +1,10 @@
+kind: enhancement
+description: >
+  Report whether an image-backed SkillCard's referenced artifact actually
+  exists, via a new best-effort Resolvable condition distinct from Ready (which
+  only means the ref was accepted). A phantom image ref — well-formed but never
+  pushed or mistyped — is now surfaced as Resolvable=False before run time
+  instead of only failing later as an ImagePullBackOff, and appears as a
+  Resolvable column in `kubectl get skillcards`. The check never flips Ready: a
+  private or momentarily unreachable registry the controller cannot confirm is
+  reported Unknown, not Missing.
