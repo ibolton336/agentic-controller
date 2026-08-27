@@ -1,0 +1,13 @@
+kind: feature
+
+description: >
+  The AgentRun controller now fails a run promptly when its sandbox pod
+  cannot start, instead of leaving it stuck in Pending indefinitely. Fatal
+  container waiting reasons (ImagePullBackOff, CrashLoopBackOff,
+  InvalidImageName, CreateContainerConfigError), including on init
+  containers such as the skill loader, move the run to a terminal Failed
+  state with the kubelet's reason surfaced verbatim. A new optional
+  spec.startupDeadlineSeconds (and a controller-wide
+  --agentrun-startup-deadline default) fails runs whose pods never reach a
+  running state in time, e.g. when stuck Unschedulable. Failed runs then
+  become eligible for TTL garbage collection.
