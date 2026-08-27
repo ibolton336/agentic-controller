@@ -21,6 +21,14 @@ const (
 	// ConditionTypeReady indicates whether the resource is ready.
 	ConditionTypeReady = "Ready"
 
+	// ConditionTypeResolvable indicates whether a SkillCard's image ref points
+	// at an artifact that actually exists in its registry. It is deliberately
+	// distinct from Ready: Ready reports that the spec was accepted and how the
+	// skill will be delivered, while Resolvable is a best-effort registry check
+	// that can be Unknown (e.g. a private image the controller cannot
+	// authenticate to) without dragging the card out of Ready.
+	ConditionTypeResolvable = "Resolvable"
+
 	// labelManagedBy is the standard Kubernetes label key for managed-by.
 	labelManagedBy = "app.kubernetes.io/managed-by"
 

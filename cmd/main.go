@@ -201,6 +201,10 @@ func main() {
 	if err := (&controller.SkillCardReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
+		// Best-effort registry existence check behind the Resolvable condition,
+		// so a well-formed ref to a missing artifact is flagged at reconcile
+		// rather than surfacing only as ImagePullBackOff at run time.
+		Resolver: controller.NewRegistryImageResolver(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "SkillCard")
 		os.Exit(1)

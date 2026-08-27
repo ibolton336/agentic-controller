@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,10 +31,23 @@ import (
 	konveyoriov1alpha1 "github.com/konveyor/agentic-controller/api/v1alpha1"
 )
 
+// resolvableRecheckInterval is how often an image-backed SkillCard is
+// re-reconciled to refresh its Resolvable condition. A missing artifact may be
+// published later, a present one deleted or retagged, and an Unknown result
+// clear once the registry is reachable again — so the check self-heals rather
+// than freezing whatever the first reconcile saw.
+const resolvableRecheckInterval = 10 * time.Minute
+
 // SkillCardReconciler reconciles a SkillCard object.
 type SkillCardReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// Resolver performs the best-effort registry existence check behind the
+	// Resolvable condition. When nil, resolvability is not evaluated and image
+	// cards carry no Resolvable condition — which keeps envtest and other
+	// network-free contexts from reaching out to a registry.
+	Resolver ImageResolver
 }
 
 // +kubebuilder:rbac:groups=konveyor.io,resources=skillcards,verbs=get;list;watch;create;update;patch;delete
@@ -61,9 +75,13 @@ func (r *SkillCardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// Set observed generation.
 	skillCard.Status.ObservedGeneration = skillCard.Generation
 
+	// requeueAfter is set for image cards so the Resolvable condition is
+	// periodically refreshed; the other delivery modes have nothing to poll.
+	var requeueAfter time.Duration
+
 	switch {
 	case skillCard.Spec.Image != "":
-		r.reconcileImage(&skillCard)
+		requeueAfter = r.reconcileImage(ctx, &skillCard)
 	case skillCard.Spec.Source != "":
 		r.reconcileSource(&skillCard)
 	case skillCard.Spec.Inline != "":
@@ -73,6 +91,9 @@ func (r *SkillCardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		// Otherwise a card that loses its source keeps reporting how it used
 		// to be delivered, while Ready correctly flips to False.
 		skillCard.Status.DeliveryMode = ""
+		// Resolvable only ever describes an image ref; clear any stale one left
+		// behind by a card that used to be image-backed.
+		meta.RemoveStatusCondition(&skillCard.Status.Conditions, ConditionTypeResolvable)
 		meta.SetStatusCondition(&skillCard.Status.Conditions, metav1.Condition{
 			Type:               ConditionTypeReady,
 			Status:             metav1.ConditionFalse,
@@ -88,18 +109,26 @@ func (r *SkillCardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
 // reconcileImage handles SkillCards with an OCI image source.
 //
-// The ref is accepted at face value. Proving it resolves would need a registry
-// client, pull secrets and network egress in the reconciler, and would still
-// not prove the image holds a usable skill — the frontmatter that decides that
-// is only readable once the volume is mounted. So this is checked at pod init
-// by the skill loader, where the bytes actually are, and a bad ref fails the
-// pod there rather than being reported here.
-func (r *SkillCardReconciler) reconcileImage(sc *konveyoriov1alpha1.SkillCard) {
+// Two guarantees are reported separately, because they are not the same thing:
+//
+//   - Ready says the spec was accepted — the ref is well-formed and this is how
+//     the skill will be delivered. It never waits on a registry, so a transient
+//     outage cannot flip a card unready.
+//   - Resolvable is a best-effort check that the referenced artifact actually
+//     exists. Without it, a well-formed ref to a missing or mistyped artifact
+//     reported Ready and only failed much later, at pod runtime, as
+//     ImagePullBackOff — the readiness claimed more than it verified (issue
+//     #187). Note that even a present manifest does not prove the image holds a
+//     usable skill; the frontmatter that decides that is only readable once the
+//     volume is mounted, so the skill loader still validates at pod init.
+//
+// It returns how long until the next refresh of the Resolvable condition.
+func (r *SkillCardReconciler) reconcileImage(ctx context.Context, sc *konveyoriov1alpha1.SkillCard) time.Duration {
 	sc.Status.ResolvedImage = sc.Spec.Image
 	sc.Status.DeliveryMode = "image"
 	meta.SetStatusCondition(&sc.Status.Conditions, metav1.Condition{
@@ -109,6 +138,42 @@ func (r *SkillCardReconciler) reconcileImage(sc *konveyoriov1alpha1.SkillCard) {
 		Reason:             "ImageResolved",
 		Message:            fmt.Sprintf("OCI image ref accepted: %s", sc.Spec.Image),
 	})
+	return r.setResolvable(ctx, sc)
+}
+
+// setResolvable runs the best-effort registry existence check and records the
+// Resolvable condition. It returns the requeue interval for the next refresh,
+// or zero when no resolver is configured (resolvability checking disabled).
+func (r *SkillCardReconciler) setResolvable(ctx context.Context, sc *konveyoriov1alpha1.SkillCard) time.Duration {
+	if r.Resolver == nil {
+		// No resolver wired: leave resolvability unevaluated rather than
+		// claiming an answer we did not compute.
+		meta.RemoveStatusCondition(&sc.Status.Conditions, ConditionTypeResolvable)
+		return 0
+	}
+
+	result, message := r.Resolver.Resolve(ctx, sc.Spec.Image)
+	cond := metav1.Condition{
+		Type:               ConditionTypeResolvable,
+		ObservedGeneration: sc.Generation,
+		Message:            message,
+	}
+	switch result {
+	case imageResolvePresent:
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = "ArtifactPresent"
+	case imageResolveMissing:
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = "ArtifactMissing"
+	default:
+		// Inconclusive (auth, network, timeout). Unknown, never False, so a
+		// private or momentarily unreachable image the pod could still pull is
+		// not wrongly condemned.
+		cond.Status = metav1.ConditionUnknown
+		cond.Reason = "ResolveInconclusive"
+	}
+	meta.SetStatusCondition(&sc.Status.Conditions, cond)
+	return resolvableRecheckInterval
 }
 
 // reconcileSource handles SkillCards with a git source URL.
@@ -120,6 +185,8 @@ func (r *SkillCardReconciler) reconcileImage(sc *konveyoriov1alpha1.SkillCard) {
 func (r *SkillCardReconciler) reconcileSource(sc *konveyoriov1alpha1.SkillCard) {
 	sc.Status.ResolvedImage = ""
 	sc.Status.DeliveryMode = "source"
+	// Resolvable is an image-only signal; drop any left from a prior image spec.
+	meta.RemoveStatusCondition(&sc.Status.Conditions, ConditionTypeResolvable)
 	meta.SetStatusCondition(&sc.Status.Conditions, metav1.Condition{
 		Type:               ConditionTypeReady,
 		Status:             metav1.ConditionTrue,
@@ -142,6 +209,8 @@ func (r *SkillCardReconciler) reconcileSource(sc *konveyoriov1alpha1.SkillCard) 
 func (r *SkillCardReconciler) reconcileInline(sc *konveyoriov1alpha1.SkillCard) {
 	sc.Status.ResolvedImage = ""
 	sc.Status.DeliveryMode = "inline"
+	// Resolvable is an image-only signal; drop any left from a prior image spec.
+	meta.RemoveStatusCondition(&sc.Status.Conditions, ConditionTypeResolvable)
 
 	if err := validateInlineSkill(sc.Spec.Inline); err != nil {
 		meta.SetStatusCondition(&sc.Status.Conditions, metav1.Condition{

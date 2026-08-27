@@ -120,6 +120,9 @@ var _ = BeforeSuite(func() {
 	err = (&SkillCardReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
+		// Deterministic, network-free resolver keyed by ref so the Resolvable
+		// condition can be exercised in envtest without reaching a registry.
+		Resolver: fakeImageResolver{},
 	}).SetupWithManager(mgr)
 	Expect(err).NotTo(HaveOccurred())
 
