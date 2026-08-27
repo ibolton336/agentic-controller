@@ -1,0 +1,10 @@
+kind: feature
+
+description: >
+  AgentRun and AgentWorkflowRun now support time-based garbage collection
+  via spec.ttlSecondsAfterFinished. Once a run reaches a terminal phase
+  (Succeeded or Failed), the controller deletes it that many seconds after
+  its completion time, mirroring Kubernetes Job TTL. Owned Sandboxes and
+  other child objects are removed by the existing owner-reference cascade.
+  Unset or negative disables TTL, so existing runs are never reaped
+  automatically.
