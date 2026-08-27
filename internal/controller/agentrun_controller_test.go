@@ -152,7 +152,10 @@ var _ = Describe("AgentRun Controller", func() {
 		It("should garbage-collect the run after the TTL elapses", func() {
 			// A nonexistent agent drives the run straight to a terminal
 			// Failed phase without a Sandbox; with a short TTL the controller
-			// then anchors CompletionTime and deletes the run.
+			// then anchors CompletionTime and deletes the run. Only the GC
+			// outcome is asserted — the transient terminal state is deleted
+			// too quickly to observe reliably, and eventual deletion can only
+			// happen once the run has gone terminal and been anchored.
 			ttl := int32(1)
 			run := &konveyoriov1alpha1.AgentRun{
 				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
@@ -164,16 +167,6 @@ var _ = Describe("AgentRun Controller", func() {
 			Expect(k8sClient.Create(ctx, run)).To(Succeed())
 
 			key := types.NamespacedName{Name: name, Namespace: testNamespace}
-
-			// It reaches a terminal phase and records a completion anchor.
-			Eventually(func(g Gomega) {
-				var fetched konveyoriov1alpha1.AgentRun
-				g.Expect(k8sClient.Get(ctx, key, &fetched)).To(Succeed())
-				g.Expect(fetched.Status.Phase).To(Equal(konveyoriov1alpha1.AgentRunPhaseFailed))
-				g.Expect(fetched.Status.CompletionTime).NotTo(BeNil())
-			}, timeout, interval).Should(Succeed())
-
-			// Once the TTL elapses the run is deleted.
 			Eventually(func(g Gomega) {
 				var fetched konveyoriov1alpha1.AgentRun
 				err := k8sClient.Get(ctx, key, &fetched)

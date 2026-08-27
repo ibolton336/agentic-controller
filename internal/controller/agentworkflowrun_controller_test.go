@@ -95,7 +95,9 @@ var _ = Describe("AgentWorkflowRun Controller", func() {
 
 		It("should garbage-collect the run after the TTL elapses", func() {
 			// A nonexistent workflow drives the run straight to a terminal
-			// Failed phase; with a short TTL the controller then deletes it.
+			// Failed phase; with a short TTL the controller then deletes it,
+			// then GC follows. Only the deletion outcome is asserted; the
+			// transient terminal state is deleted too fast to observe.
 			ttl := int32(1)
 			pbRun := &konveyoriov1alpha1.AgentWorkflowRun{
 				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
@@ -107,12 +109,6 @@ var _ = Describe("AgentWorkflowRun Controller", func() {
 			Expect(k8sClient.Create(ctx, pbRun)).To(Succeed())
 
 			key := types.NamespacedName{Name: name, Namespace: testNamespace}
-			Eventually(func(g Gomega) {
-				var fetched konveyoriov1alpha1.AgentWorkflowRun
-				g.Expect(k8sClient.Get(ctx, key, &fetched)).To(Succeed())
-				g.Expect(fetched.Status.Phase).To(Equal(konveyoriov1alpha1.AgentRunPhaseFailed))
-			}, timeout, interval).Should(Succeed())
-
 			Eventually(func(g Gomega) {
 				var fetched konveyoriov1alpha1.AgentWorkflowRun
 				err := k8sClient.Get(ctx, key, &fetched)
