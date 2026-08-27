@@ -67,6 +67,7 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var agentRunTTL time.Duration
+	var agentRunStartupDeadline time.Duration
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -89,6 +90,12 @@ func main() {
 		"Default lifetime of a finished AgentRun or AgentWorkflowRun before it is "+
 			"garbage-collected (e.g. 24h). 0 disables the default, keeping runs "+
 			"until deleted. A run's own spec.ttlSecondsAfterFinished overrides this.")
+	flag.DurationVar(&agentRunStartupDeadline, "agentrun-startup-deadline", 0,
+		"Default deadline for an AgentRun's pod to reach a running state before "+
+			"the run is failed with StartupDeadlineExceeded (e.g. 10m). 0 disables "+
+			"the default. Fatal pod errors (ImagePullBackOff, CrashLoopBackOff, "+
+			"InvalidImageName, CreateContainerConfigError) fail runs immediately "+
+			"regardless. A run's own spec.startupDeadlineSeconds overrides this.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -246,6 +253,9 @@ func main() {
 	}
 	if agentRunTTL > 0 {
 		agentRunReconciler.DefaultTTLAfterFinished = &agentRunTTL
+	}
+	if agentRunStartupDeadline > 0 {
+		agentRunReconciler.DefaultStartupDeadline = &agentRunStartupDeadline
 	}
 	if err := agentRunReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "AgentRun")
