@@ -21,6 +21,7 @@ import (
 	stderrors "errors"
 	"fmt"
 	"maps"
+	"time"
 
 	"strings"
 
@@ -51,6 +52,14 @@ type AgentWorkflowRunReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
+
+	// DefaultTTLAfterFinished, when non-nil, is the fallback lifetime applied
+	// to a terminal AgentWorkflowRun whose spec does not set
+	// TTLSecondsAfterFinished. The controller deletes such a run this long
+	// after it finished — cascading to the child AgentRuns it owns. Nil
+	// disables the default. A run's own spec.ttlSecondsAfterFinished always
+	// overrides this. Wired from the --agentrun-ttl flag in main.
+	DefaultTTLAfterFinished *time.Duration
 }
 
 // +kubebuilder:rbac:groups=konveyor.io,resources=agentworkflowruns,verbs=get;list;watch;create;update;patch;delete
@@ -81,10 +90,10 @@ func (r *AgentWorkflowRunReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	original := pbRun.DeepCopy()
 	pbRun.Status.ObservedGeneration = pbRun.Generation
 
-	// If the run is already terminal, nothing to do.
-	if pbRun.Status.Phase == konveyoriov1alpha1.AgentRunPhaseSucceeded ||
-		pbRun.Status.Phase == konveyoriov1alpha1.AgentRunPhaseFailed {
-		return ctrl.Result{}, nil
+	// A terminal run has no orchestration work left; the only remaining
+	// action is TTL-based garbage collection.
+	if isTerminalPhase(pbRun.Status.Phase) {
+		return r.reconcileTTL(ctx, &pbRun, original)
 	}
 
 	// Look up the referenced AgentWorkflow.
@@ -536,6 +545,56 @@ func (r *AgentWorkflowRunReconciler) patchRunStatus(
 	return ctrl.Result{}, nil
 }
 
+// effectiveTTL resolves a terminal AgentWorkflowRun's lifetime: the run's own
+// spec.ttlSecondsAfterFinished wins, then the controller's
+// DefaultTTLAfterFinished. The bool is false when neither is set, meaning GC
+// is disabled and the run is kept until deleted manually.
+func (r *AgentWorkflowRunReconciler) effectiveTTL(pbRun *konveyoriov1alpha1.AgentWorkflowRun) (time.Duration, bool) {
+	if pbRun.Spec.TTLSecondsAfterFinished != nil {
+		return time.Duration(*pbRun.Spec.TTLSecondsAfterFinished) * time.Second, true
+	}
+	if r.DefaultTTLAfterFinished != nil {
+		return *r.DefaultTTLAfterFinished, true
+	}
+	return 0, false
+}
+
+// reconcileTTL garbage-collects a terminal AgentWorkflowRun once its TTL
+// elapses. With no effective TTL the run is kept. The finish anchor is
+// CompletionTime; a terminal run that never recorded one gets it stamped now
+// so expiry is deterministic across controller restarts. Before the TTL
+// elapses the reconcile is requeued for the remaining time; once it has, the
+// run is deleted — cascading to the child AgentRuns it owns via owner
+// references.
+func (r *AgentWorkflowRunReconciler) reconcileTTL(
+	ctx context.Context,
+	pbRun *konveyoriov1alpha1.AgentWorkflowRun,
+	original *konveyoriov1alpha1.AgentWorkflowRun,
+) (ctrl.Result, error) {
+	ttl, ok := r.effectiveTTL(pbRun)
+	if !ok {
+		return ctrl.Result{}, nil
+	}
+
+	// Anchor the clock: a terminal run with no CompletionTime records one now.
+	if pbRun.Status.CompletionTime == nil {
+		now := metav1.Now()
+		pbRun.Status.CompletionTime = &now
+		return r.patchRunStatus(ctx, pbRun, original)
+	}
+
+	if remaining := time.Until(pbRun.Status.CompletionTime.Add(ttl)); remaining > 0 {
+		return ctrl.Result{RequeueAfter: remaining}, nil
+	}
+
+	log.FromContext(ctx).Info("Deleting finished AgentWorkflowRun (TTL elapsed)",
+		"agentWorkflowRun", pbRun.Name, "ttl", ttl.String(), "completionTime", pbRun.Status.CompletionTime)
+	if err := r.Delete(ctx, pbRun); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	return ctrl.Result{}, nil
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *AgentWorkflowRunReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Index AgentWorkflowRuns by workflowRef for efficient reverse lookup
@@ -587,8 +646,7 @@ func (r *AgentWorkflowRunReconciler) findRunsForWorkflow(
 	var requests []reconcile.Request
 	for _, run := range runList.Items {
 		// Only re-reconcile non-terminal runs.
-		if run.Status.Phase == konveyoriov1alpha1.AgentRunPhaseSucceeded ||
-			run.Status.Phase == konveyoriov1alpha1.AgentRunPhaseFailed {
+		if isTerminalPhase(run.Status.Phase) {
 			continue
 		}
 		requests = append(requests, reconcile.Request{

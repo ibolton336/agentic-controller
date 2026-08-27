@@ -22,6 +22,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -86,6 +87,37 @@ var _ = Describe("AgentWorkflowRun Controller", func() {
 			}, timeout, interval).Should(Succeed())
 
 			Expect(k8sClient.Delete(ctx, pbRun)).To(Succeed())
+		})
+	})
+
+	Context("when a finished workflow run sets spec.ttlSecondsAfterFinished", func() {
+		const name = "apr-ctrl-ttl-gc"
+
+		It("should garbage-collect the run after the TTL elapses", func() {
+			// A nonexistent workflow drives the run straight to a terminal
+			// Failed phase; with a short TTL the controller then deletes it.
+			ttl := int32(1)
+			pbRun := &konveyoriov1alpha1.AgentWorkflowRun{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
+				Spec: konveyoriov1alpha1.AgentWorkflowRunSpec{
+					WorkflowRef:             "nonexistent-workflow",
+					TTLSecondsAfterFinished: &ttl,
+				},
+			}
+			Expect(k8sClient.Create(ctx, pbRun)).To(Succeed())
+
+			key := types.NamespacedName{Name: name, Namespace: testNamespace}
+			Eventually(func(g Gomega) {
+				var fetched konveyoriov1alpha1.AgentWorkflowRun
+				g.Expect(k8sClient.Get(ctx, key, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).To(Equal(konveyoriov1alpha1.AgentRunPhaseFailed))
+			}, timeout, interval).Should(Succeed())
+
+			Eventually(func(g Gomega) {
+				var fetched konveyoriov1alpha1.AgentWorkflowRun
+				err := k8sClient.Get(ctx, key, &fetched)
+				g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "expected AgentWorkflowRun to be garbage-collected")
+			}, timeout, interval).Should(Succeed())
 		})
 	})
 

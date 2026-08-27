@@ -26,6 +26,7 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -147,6 +148,14 @@ type AgentRunReconciler struct {
 	// loader of the same version.
 	SkillLoaderImage string
 
+	// DefaultTTLAfterFinished, when non-nil, is the fallback lifetime applied
+	// to a terminal AgentRun whose spec does not set TTLSecondsAfterFinished.
+	// The controller deletes such a run this long after it finished. Nil
+	// disables the default (runs are kept until deleted). A run's own
+	// spec.ttlSecondsAfterFinished always overrides this. Wired from the
+	// --agentrun-ttl flag in main.
+	DefaultTTLAfterFinished *time.Duration
+
 	// apiReader reads directly from the API server, bypassing the manager
 	// cache. It is used only for the best-effort pod termination-message
 	// lookup: a direct read avoids surfacing a stale generic message when
@@ -186,10 +195,10 @@ func (r *AgentRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	original := run.DeepCopy()
 	run.Status.ObservedGeneration = run.Generation
 
-	// If the run is already terminal, nothing to do.
-	if run.Status.Phase == konveyoriov1alpha1.AgentRunPhaseSucceeded ||
-		run.Status.Phase == konveyoriov1alpha1.AgentRunPhaseFailed {
-		return ctrl.Result{}, nil
+	// A terminal run has no execution work left; the only remaining action is
+	// TTL-based garbage collection (delete once the run's lifetime elapses).
+	if isTerminalPhase(run.Status.Phase) {
+		return r.reconcileTTL(ctx, &run, original)
 	}
 
 	// Shed the legacy Ready condition on any live run created before it was
@@ -1437,6 +1446,64 @@ func (r *AgentRunReconciler) patchRunStatus(
 	return ctrl.Result{}, nil
 }
 
+// isTerminalPhase reports whether an AgentRun phase is terminal — the run has
+// finished and no further execution work happens.
+func isTerminalPhase(phase konveyoriov1alpha1.AgentRunPhase) bool {
+	return phase == konveyoriov1alpha1.AgentRunPhaseSucceeded ||
+		phase == konveyoriov1alpha1.AgentRunPhaseFailed
+}
+
+// effectiveTTL resolves a terminal AgentRun's lifetime: the run's own
+// spec.ttlSecondsAfterFinished wins, then the controller's
+// DefaultTTLAfterFinished. The bool is false when neither is set, meaning GC
+// is disabled and the run is kept until deleted manually.
+func (r *AgentRunReconciler) effectiveTTL(run *konveyoriov1alpha1.AgentRun) (time.Duration, bool) {
+	if run.Spec.TTLSecondsAfterFinished != nil {
+		return time.Duration(*run.Spec.TTLSecondsAfterFinished) * time.Second, true
+	}
+	if r.DefaultTTLAfterFinished != nil {
+		return *r.DefaultTTLAfterFinished, true
+	}
+	return 0, false
+}
+
+// reconcileTTL garbage-collects a terminal AgentRun once its TTL elapses.
+// With no effective TTL the run is kept. The finish anchor is CompletionTime;
+// a terminal run that never recorded one (e.g. a validation failure before a
+// Sandbox existed) gets it stamped now so expiry is deterministic across
+// controller restarts. Before the TTL elapses the reconcile is requeued for
+// the remaining time; once it has, the run is deleted — cascading to
+// everything it owns (Sandbox, pod, per-run ConfigMaps/Secrets) via owner
+// references.
+func (r *AgentRunReconciler) reconcileTTL(
+	ctx context.Context,
+	run *konveyoriov1alpha1.AgentRun,
+	original *konveyoriov1alpha1.AgentRun,
+) (ctrl.Result, error) {
+	ttl, ok := r.effectiveTTL(run)
+	if !ok {
+		return ctrl.Result{}, nil
+	}
+
+	// Anchor the clock: a terminal run with no CompletionTime records one now.
+	if run.Status.CompletionTime == nil {
+		now := metav1.Now()
+		run.Status.CompletionTime = &now
+		return r.patchRunStatus(ctx, run, original)
+	}
+
+	if remaining := time.Until(run.Status.CompletionTime.Add(ttl)); remaining > 0 {
+		return ctrl.Result{RequeueAfter: remaining}, nil
+	}
+
+	log.FromContext(ctx).Info("Deleting finished AgentRun (TTL elapsed)",
+		"agentRun", run.Name, "ttl", ttl.String(), "completionTime", run.Status.CompletionTime)
+	if err := r.Delete(ctx, run); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	return ctrl.Result{}, nil
+}
+
 // generateSecretKey generates a random hex-encoded secret key.
 func generateSecretKey() (string, error) {
 	b := make([]byte, secretKeyLength)
@@ -1540,8 +1607,7 @@ func (r *AgentRunReconciler) findRunsForAgent(
 	var requests []reconcile.Request
 	for _, run := range runList.Items {
 		// Only re-reconcile non-terminal runs.
-		if run.Status.Phase == konveyoriov1alpha1.AgentRunPhaseSucceeded ||
-			run.Status.Phase == konveyoriov1alpha1.AgentRunPhaseFailed {
+		if isTerminalPhase(run.Status.Phase) {
 			continue
 		}
 		requests = append(requests, reconcile.Request{

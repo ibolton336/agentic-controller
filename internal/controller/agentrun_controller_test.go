@@ -25,6 +25,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -126,7 +127,7 @@ var _ = Describe("AgentRun Controller", func() {
 		It("should set Phase=Failed with AgentNotFound", func() {
 			run := &konveyoriov1alpha1.AgentRun{
 				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
-				Spec:       konveyoriov1alpha1.AgentRunSpec{AgentRef: "nonexistent-agent"},
+				Spec:       konveyoriov1alpha1.AgentRunSpec{AgentRef: testNonexistentAgent},
 			}
 			Expect(k8sClient.Create(ctx, run)).To(Succeed())
 
@@ -140,6 +141,69 @@ var _ = Describe("AgentRun Controller", func() {
 				g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 				g.Expect(cond.Reason).To(Equal("AgentNotFound"))
 			}, timeout, interval).Should(Succeed())
+
+			Expect(k8sClient.Delete(ctx, run)).To(Succeed())
+		})
+	})
+
+	Context("when a finished run sets spec.ttlSecondsAfterFinished", func() {
+		const name = "ar-ctrl-ttl-gc"
+
+		It("should garbage-collect the run after the TTL elapses", func() {
+			// A nonexistent agent drives the run straight to a terminal
+			// Failed phase without a Sandbox; with a short TTL the controller
+			// then anchors CompletionTime and deletes the run.
+			ttl := int32(1)
+			run := &konveyoriov1alpha1.AgentRun{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
+				Spec: konveyoriov1alpha1.AgentRunSpec{
+					AgentRef:                testNonexistentAgent,
+					TTLSecondsAfterFinished: &ttl,
+				},
+			}
+			Expect(k8sClient.Create(ctx, run)).To(Succeed())
+
+			key := types.NamespacedName{Name: name, Namespace: testNamespace}
+
+			// It reaches a terminal phase and records a completion anchor.
+			Eventually(func(g Gomega) {
+				var fetched konveyoriov1alpha1.AgentRun
+				g.Expect(k8sClient.Get(ctx, key, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).To(Equal(konveyoriov1alpha1.AgentRunPhaseFailed))
+				g.Expect(fetched.Status.CompletionTime).NotTo(BeNil())
+			}, timeout, interval).Should(Succeed())
+
+			// Once the TTL elapses the run is deleted.
+			Eventually(func(g Gomega) {
+				var fetched konveyoriov1alpha1.AgentRun
+				err := k8sClient.Get(ctx, key, &fetched)
+				g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "expected AgentRun to be garbage-collected")
+			}, timeout, interval).Should(Succeed())
+		})
+	})
+
+	Context("when a finished run has no TTL configured", func() {
+		const name = "ar-ctrl-no-ttl"
+
+		It("should keep the run after it finishes", func() {
+			run := &konveyoriov1alpha1.AgentRun{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
+				Spec:       konveyoriov1alpha1.AgentRunSpec{AgentRef: testNonexistentAgent},
+			}
+			Expect(k8sClient.Create(ctx, run)).To(Succeed())
+
+			key := types.NamespacedName{Name: name, Namespace: testNamespace}
+			Eventually(func(g Gomega) {
+				var fetched konveyoriov1alpha1.AgentRun
+				g.Expect(k8sClient.Get(ctx, key, &fetched)).To(Succeed())
+				g.Expect(fetched.Status.Phase).To(Equal(konveyoriov1alpha1.AgentRunPhaseFailed))
+			}, timeout, interval).Should(Succeed())
+
+			// With no TTL the run must still exist after a grace period.
+			Consistently(func(g Gomega) {
+				var fetched konveyoriov1alpha1.AgentRun
+				g.Expect(k8sClient.Get(ctx, key, &fetched)).To(Succeed())
+			}, 2*time.Second, interval).Should(Succeed())
 
 			Expect(k8sClient.Delete(ctx, run)).To(Succeed())
 		})

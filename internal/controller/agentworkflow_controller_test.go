@@ -45,7 +45,7 @@ var _ = Describe("AgentWorkflow Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{Name: workflowName, Namespace: testNamespace},
 				Spec: konveyoriov1alpha1.AgentWorkflowSpec{
 					Stages: []konveyoriov1alpha1.AgentWorkflowStage{
-						{Name: "plan", AgentRef: "nonexistent-agent"},
+						{Name: "plan", AgentRef: testNonexistentAgent},
 					},
 				},
 			}
@@ -59,7 +59,7 @@ var _ = Describe("AgentWorkflow Controller", func() {
 				g.Expect(readyCond).NotTo(BeNil())
 				g.Expect(readyCond.Status).To(Equal(metav1.ConditionFalse))
 				g.Expect(readyCond.Reason).To(Equal("AgentsNotReady"))
-				g.Expect(readyCond.Message).To(ContainSubstring("nonexistent-agent"))
+				g.Expect(readyCond.Message).To(ContainSubstring(testNonexistentAgent))
 			}, timeout, interval).Should(Succeed())
 
 			Expect(k8sClient.Delete(ctx, workflow)).To(Succeed())

@@ -143,6 +143,18 @@ type AgentRunSpec struct {
 	// harness default.
 	// +optional
 	GitConfig *GitConfig `json:"gitConfig,omitempty"`
+
+	// TTLSecondsAfterFinished limits the lifetime of an AgentRun that has
+	// reached a terminal phase (Succeeded or Failed), mirroring Job's
+	// ttlSecondsAfterFinished. When set, the controller deletes the run this
+	// many seconds after it finished — cascading to everything it owns
+	// (Sandbox, pod, per-run ConfigMaps/Secrets) via owner references — so
+	// terminal runs do not accumulate. Zero deletes as soon as the run
+	// finishes. When unset, the run is kept until deleted manually, unless the
+	// controller is configured with a default TTL.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	TTLSecondsAfterFinished *int32 `json:"ttlSecondsAfterFinished,omitempty"`
 }
 
 // AgentRunStatus defines the observed state of an AgentRun.

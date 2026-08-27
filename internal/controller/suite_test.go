@@ -41,15 +41,16 @@ import (
 )
 
 const (
-	testNamespace     = "default"
-	testAgentImage    = "quay.io/konveyor/agent-base:latest"
-	testEndpoint      = "https://api.example.com"
-	testSecretKey     = "api-key"
-	testLLMModelName  = "test-model"
-	testGatewayName   = "some-gateway"
-	testProviderType  = "test-provider"
-	testRepoURL       = "https://github.com/test/repo.git"
-	testDefaultBranch = "main"
+	testNamespace        = "default"
+	testAgentImage       = "quay.io/konveyor/agent-base:latest"
+	testEndpoint         = "https://api.example.com"
+	testSecretKey        = "api-key"
+	testLLMModelName     = "test-model"
+	testGatewayName      = "some-gateway"
+	testProviderType     = "test-provider"
+	testRepoURL          = "https://github.com/test/repo.git"
+	testDefaultBranch    = "main"
+	testNonexistentAgent = "nonexistent-agent"
 )
 
 var (
