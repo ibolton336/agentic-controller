@@ -1288,12 +1288,9 @@ func (r *AgentRunReconciler) updatePhaseFromSandbox(
 			return remaining
 		}
 		run.Status.Phase = konveyoriov1alpha1.AgentRunPhasePending
-		podPhase := "not created yet"
-		if pod != nil {
-			podPhase = string(pod.Status.Phase)
-		}
 		setRunSucceeded(run, metav1.ConditionUnknown, "PodNotRunning",
-			fmt.Sprintf("Waiting for sandbox pod %q to run (%s)", sandbox.Name, podPhase))
+			fmt.Sprintf("Waiting for sandbox pod %q to run (%s)",
+				sandbox.Name, podStartupDetail(pod)))
 		return 0
 	}
 	run.Status.Phase = konveyoriov1alpha1.AgentRunPhaseRunning
@@ -1325,6 +1322,11 @@ func stampCompletion(run *konveyoriov1alpha1.AgentRun, pod *corev1.Pod, sandbox 
 // the container cannot be configured, or it crashes on every start. They are
 // settled states — kubelet has already retried into a back-off, or the
 // config is permanently wrong — so the run is failed rather than waited on.
+//
+// CrashLoopBackOff is effectively unreachable today: sandbox pods run with
+// RestartPolicyNever, so a crashing container terminates (surfaced through the
+// Sandbox Finished / setTerminalOutcome path) rather than entering a waiting
+// back-off. It is kept as a guard against a future restart-policy change.
 var fatalWaitingReasons = map[string]bool{
 	"ImagePullBackOff":           true,
 	"InvalidImageName":           true,
