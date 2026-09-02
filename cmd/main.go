@@ -89,7 +89,9 @@ func main() {
 	flag.DurationVar(&agentRunTTL, "agentrun-ttl", 0,
 		"Default lifetime of a finished AgentRun or AgentWorkflowRun before it is "+
 			"garbage-collected (e.g. 24h). 0 disables the default, keeping runs "+
-			"until deleted. A run's own spec.ttlSecondsAfterFinished overrides this.")
+			"until deleted. A run's own spec.ttlSecondsAfterFinished overrides this. "+
+			"Applies to already-finished runs too: enabling it reaps any run whose "+
+			"completion is already older than the TTL on the next reconcile.")
 	flag.DurationVar(&agentRunStartupDeadline, "agentrun-startup-deadline", 0,
 		"Default deadline for an AgentRun's pod to reach a running state before "+
 			"the run is failed with StartupDeadlineExceeded (e.g. 10m). 0 disables "+

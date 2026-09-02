@@ -6,5 +6,5 @@ description: >
   (Succeeded or Failed), the controller deletes it that many seconds after
   its completion time, mirroring Kubernetes Job TTL. Owned Sandboxes and
   other child objects are removed by the existing owner-reference cascade.
-  Unset or negative disables TTL, so existing runs are never reaped
-  automatically.
+  Unset disables TTL, so existing runs are never reaped automatically;
+  zero deletes a run as soon as it finishes.
