@@ -36,7 +36,6 @@ const (
 	agentRunKind         = "AgentRun"
 	agentWorkflowRunKind = "AgentWorkflowRun"
 	sandboxKind          = "Sandbox"
-	sandboxAPIVersion    = "agents.x-k8s.io/v1beta1"
 )
 
 // isOwnerlessManagedRunResource identifies children created directly by the
@@ -120,6 +119,48 @@ func deleteOrphanedObject(
 	return nil
 }
 
+// mayDeletePodForMissingRun follows a Pod's Sandbox controller reference before
+// allowing the AgentRun cleanup path to delete it. A live matching Sandbox
+// remains authoritative; deleting an eligible Sandbox will either cascade to
+// the Pod or enqueue another sweep after the Sandbox disappears.
+func (r *AgentRunReconciler) mayDeletePodForMissingRun(
+	ctx context.Context,
+	pod *corev1.Pod,
+	runName string,
+) (bool, error) {
+	for _, ref := range pod.GetOwnerReferences() {
+		if ref.Controller == nil || !*ref.Controller {
+			continue
+		}
+		if ref.APIVersion != sandboxv1beta1.GroupVersion.String() ||
+			ref.Kind != sandboxKind || ref.Name != runName {
+			return false, nil
+		}
+
+		var reader client.Reader = r.Client
+		if r.apiReader != nil {
+			reader = r.apiReader
+		}
+		var sandbox sandboxv1beta1.Sandbox
+		key := types.NamespacedName{Namespace: pod.Namespace, Name: ref.Name}
+		if err := reader.Get(ctx, key, &sandbox); err != nil {
+			if errors.IsNotFound(err) {
+				return true, nil
+			}
+			return false, fmt.Errorf("getting Sandbox owner for Pod %s/%s: %w",
+				pod.Namespace, pod.Name, err)
+		}
+
+		// A same-name Sandbox with a different UID is not this Pod's owner. The
+		// referenced Sandbox is gone, so the Pod is safe to sweep.
+		if ref.UID != "" && sandbox.UID != "" && ref.UID != sandbox.UID {
+			return true, nil
+		}
+		return false, nil
+	}
+	return true, nil
+}
+
 // cleanupOrphanedRunResources is the fallback behind Kubernetes owner-based
 // garbage collection. It removes controller-managed children that still carry
 // the AgentRun label after that run no longer exists. Deleting the Sandbox also
@@ -173,8 +214,18 @@ func (r *AgentRunReconciler) cleanupOrphanedRunResources(
 		return fmt.Errorf("listing Pods for missing AgentRun %s: %w", key, err)
 	}
 	for i := range pods.Items {
+		mayDelete, err := r.mayDeletePodForMissingRun(ctx, &pods.Items[i], key.Name)
+		if err != nil {
+			return err
+		}
+		if !mayDelete {
+			log.FromContext(ctx).V(1).Info("Skipping labeled Pod with a foreign ownership chain",
+				"namespace", pods.Items[i].Namespace, "name", pods.Items[i].Name,
+				"missingOwnerKind", agentRunKind, "missingOwnerName", key.Name)
+			continue
+		}
 		if err := deleteOrphanedObject(ctx, r.Client, &pods.Items[i], "Pod",
-			sandboxAPIVersion, sandboxKind, key.Name); err != nil {
+			sandboxv1beta1.GroupVersion.String(), sandboxKind, key.Name); err != nil {
 			return err
 		}
 	}
