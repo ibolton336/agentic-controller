@@ -596,39 +596,8 @@ var _ = Describe("Gateway Controller", func() {
 		)
 
 		It("should set Ready=True with VerificationSkipped and create no Job", func() {
-			// SigV4 spans three variables, so the credentialRef is keyless
-			// and the whole Secret is the credential.
-			secret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      secretName,
-					Namespace: testNamespace,
-				},
-				StringData: map[string]string{
-					"AWS_ACCESS_KEY_ID":     "AKIAEXAMPLE",
-					"AWS_SECRET_ACCESS_KEY": "secret",
-					"AWS_REGION":            testAWSRegion,
-				},
-			}
+			secret, gateway := newBedrockGatewayFixture(name, secretName)
 			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
-
-			gateway := &konveyoriov1alpha1.Gateway{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      name,
-					Namespace: testNamespace,
-				},
-				Spec: konveyoriov1alpha1.GatewaySpec{
-					// Hyphenated, as users write it: the skip decision must
-					// go through normalizeProvider.
-					Provider: testProviderBedrock,
-					Endpoint: "https://bedrock-runtime.us-east-1.amazonaws.com",
-					CredentialRef: konveyoriov1alpha1.GatewayCredentialRef{
-						SecretName: secretName,
-					},
-					Model: konveyoriov1alpha1.GatewayModel{
-						Name: testLLMModelName, ContextWindow: 100000,
-					},
-				},
-			}
 			Expect(k8sClient.Create(ctx, gateway)).To(Succeed())
 
 			By("verifying the Gateway settles as Ready without being probed")
@@ -661,5 +630,98 @@ var _ = Describe("Gateway Controller", func() {
 			Expect(k8sClient.Delete(ctx, gateway)).To(Succeed())
 			Expect(k8sClient.Delete(ctx, secret)).To(Succeed())
 		})
+
+		// A controller from before the skip parks a native Gateway at
+		// ConnectionFailed. That reason is terminal for the generation and
+		// credential it was reached against, so an upgraded controller must
+		// not take the "already settled" early return on it - otherwise the
+		// stale verdict outlives the upgrade and every referencing Agent stays
+		// at DependenciesNotReady until someone edits the spec (#227).
+		It("should replace a stale ConnectionFailed verdict left by an older controller", func() {
+			const (
+				staleName       = "llm-ctrl-bedrock-stale"
+				staleSecretName = "llm-secret-bedrock-stale"
+			)
+			secret, gateway := newBedrockGatewayFixture(staleName, staleSecretName)
+			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+			Expect(k8sClient.Create(ctx, gateway)).To(Succeed())
+
+			gwKey := types.NamespacedName{Name: staleName, Namespace: testNamespace}
+			By("letting the Gateway settle as skipped first")
+			Eventually(func(g Gomega) {
+				var fetched konveyoriov1alpha1.Gateway
+				g.Expect(k8sClient.Get(ctx, gwKey, &fetched)).To(Succeed())
+				readyCond := meta.FindStatusCondition(fetched.Status.Conditions, ConditionTypeReady)
+				g.Expect(readyCond).NotTo(BeNil())
+				g.Expect(readyCond.Reason).To(Equal(reasonVerificationSkipped))
+			}, timeout, interval).Should(Succeed())
+
+			By("overwriting status with the verdict an older controller would have left")
+			// Same generation, same verifiedCredentialHash (the skip recorded
+			// it), terminal reason: exactly the shape the early return keys on.
+			Eventually(func(g Gomega) {
+				var fetched konveyoriov1alpha1.Gateway
+				g.Expect(k8sClient.Get(ctx, gwKey, &fetched)).To(Succeed())
+				fetched.Status.ConnectionVerified = false
+				meta.SetStatusCondition(&fetched.Status.Conditions, metav1.Condition{
+					Type:               ConditionTypeReady,
+					Status:             metav1.ConditionFalse,
+					ObservedGeneration: fetched.Generation,
+					Reason:             reasonConnectionFailed,
+					Message:            "Endpoint https://bedrock-runtime.us-east-1.amazonaws.com/v1/models returned HTTP 404",
+				})
+				g.Expect(k8sClient.Status().Update(ctx, &fetched)).To(Succeed())
+			}, timeout, interval).Should(Succeed())
+
+			By("verifying the reconcile replaces it with VerificationSkipped")
+			Eventually(func(g Gomega) {
+				var fetched konveyoriov1alpha1.Gateway
+				g.Expect(k8sClient.Get(ctx, gwKey, &fetched)).To(Succeed())
+				readyCond := meta.FindStatusCondition(fetched.Status.Conditions, ConditionTypeReady)
+				g.Expect(readyCond).NotTo(BeNil())
+				g.Expect(readyCond.Status).To(Equal(metav1.ConditionTrue))
+				g.Expect(readyCond.Reason).To(Equal(reasonVerificationSkipped))
+				g.Expect(fetched.Status.ConnectionVerified).To(BeFalse())
+			}, timeout, interval).Should(Succeed())
+
+			Expect(k8sClient.Delete(ctx, gateway)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, secret)).To(Succeed())
+		})
 	})
 })
+
+// newBedrockGatewayFixture returns a native aws-bedrock Gateway and the
+// Secret it points at, unsaved. SigV4 spans three variables, so the
+// credentialRef is keyless and the whole Secret is the credential. The
+// provider is hyphenated, as users write it: the skip decision must go
+// through normalizeProvider.
+func newBedrockGatewayFixture(name, secretName string) (*corev1.Secret, *konveyoriov1alpha1.Gateway) {
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: testNamespace,
+		},
+		StringData: map[string]string{
+			awsKeyID:                "AKIAEXAMPLE",
+			"AWS_SECRET_ACCESS_KEY": "secret",
+			awsRegion:               testAWSRegion,
+		},
+	}
+	gateway := &konveyoriov1alpha1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: testNamespace,
+		},
+		Spec: konveyoriov1alpha1.GatewaySpec{
+			Provider: testProviderBedrock,
+			Endpoint: "https://bedrock-runtime.us-east-1.amazonaws.com",
+			CredentialRef: konveyoriov1alpha1.GatewayCredentialRef{
+				SecretName: secretName,
+			},
+			Model: konveyoriov1alpha1.GatewayModel{
+				Name: testLLMModelName, ContextWindow: 100000,
+			},
+		},
+	}
+	return secret, gateway
+}

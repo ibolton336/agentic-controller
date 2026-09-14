@@ -205,21 +205,25 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	credHash := credentialHash(gateway.Spec.CredentialRef, &secret)
 
-	// Step 2: If already verified (or failed) for the current generation and
-	// the credential it was verified against, skip re-verification. A spec
-	// change (new generation) or a credential rotation (new hash) re-triggers.
+	// settled: the Ready condition already speaks for this generation against
+	// the credential currently in the Secret. A spec change (new generation)
+	// or a credential rotation (new hash) makes it stale.
 	readyCond := meta.FindStatusCondition(gateway.Status.Conditions, ConditionTypeReady)
-	if readyCond != nil &&
+	settled := readyCond != nil &&
 		readyCond.ObservedGeneration == gateway.Generation &&
-		gateway.Status.VerifiedCredentialHash == credHash &&
-		isTerminalReadyReason(readyCond.Reason) {
-		return ctrl.Result{}, nil
-	}
+		gateway.Status.VerifiedCredentialHash == credHash
 
-	// Step 2b: A provider with no OpenAI-compatible surface is not probed at
-	// all - the Job could only ever fail. Drop any Job left behind by a
-	// previous provider value and settle the Gateway as skipped.
+	// Step 2: A provider with no OpenAI-compatible surface is not probed at
+	// all - the Job could only ever fail. This is decided ahead of the
+	// terminal early return below on purpose: a controller from before the
+	// skip parks such a Gateway at ConnectionFailed, which is terminal, and
+	// the early return would then keep that stale verdict for good (#227).
+	// Drop any Job left behind by a previous provider value and settle the
+	// Gateway as skipped.
 	if !hasModelsProbe(gateway.Spec.Provider) {
+		if settled && readyCond.Reason == reasonVerificationSkipped {
+			return ctrl.Result{}, nil
+		}
 		if err := r.deleteVerificationJobs(ctx, &gateway, ""); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -238,6 +242,12 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				gateway.Spec.Provider),
 		})
 		return r.patchStatus(ctx, &gateway, original)
+	}
+
+	// Step 2b: If already verified (or failed) for the current generation and
+	// the credential it was verified against, skip re-verification.
+	if settled && isTerminalReadyReason(readyCond.Reason) {
+		return ctrl.Result{}, nil
 	}
 
 	// Clean up verification Jobs from prior generations and prior credentials.

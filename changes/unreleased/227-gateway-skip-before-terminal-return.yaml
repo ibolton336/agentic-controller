@@ -1,0 +1,6 @@
+kind: bugfix
+description: >
+  Decide the no-probe skip for aws-bedrock and gcp-vertex-ai Gateways before
+  the "already settled" early return, so a Gateway an older controller parked
+  at ConnectionFailed goes Ready after upgrading instead of staying stuck until
+  its spec or credential changes.
