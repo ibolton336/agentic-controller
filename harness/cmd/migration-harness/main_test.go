@@ -393,19 +393,19 @@ func TestPlanTaskRung(t *testing.T) {
 			name:  "progress against the budget",
 			cfg:   config.Config{Model: "m", MaxTurns: 40},
 			turns: 12,
-			want:  "Agent works the task (m, turn 12 of 40)",
+			want:  "Agent works its standing prompt (m, turn 12 of 40)",
 		},
 		{
 			name:  "progress without a budget",
 			cfg:   config.Config{Model: "m"},
 			turns: 12,
-			want:  "Agent works the task (m, 12 turns)",
+			want:  "Agent works its standing prompt (m, 12 turns)",
 		},
 		{
 			name:  "first turn without a budget",
 			cfg:   config.Config{},
 			turns: 1,
-			want:  "Agent works the task (1 turn)",
+			want:  "Agent works its standing prompt (1 turn)",
 		},
 		{
 			name: "standalone run with instructions",
@@ -413,7 +413,7 @@ func TestPlanTaskRung(t *testing.T) {
 				Model: "claude-sonnet-4-5", MaxTurns: 40,
 				StageInstructions: "Assess the coolstore repository for Quarkus migration.\nList blockers.",
 			},
-			want: `Agent works the task: “Assess the coolstore repository for Quarkus migration.” (claude-sonnet-4-5, up to 40 turns)`,
+			want: `Agent works the task: “Assess the coolstore repository for Quarkus migration. List blockers.” (claude-sonnet-4-5, up to 40 turns)`,
 		},
 		{
 			name: "workflow stage prefix",
@@ -425,12 +425,25 @@ func TestPlanTaskRung(t *testing.T) {
 			want: `Stage 2 of 3 — agent works the task: “Remediate” (gemini-2.5-pro, up to 200 turns)`,
 		},
 		{
-			name: "falls back to the agent prompt",
+			name: "no instructions: the agent prompt is not quoted",
 			cfg: config.Config{
 				Model:       "m",
 				AgentPrompt: "\n\n- You are a Java migration agent.",
 			},
-			want: `Agent works the task: “You are a Java migration agent.” (m)`,
+			want: `Agent works its standing prompt (m)`,
+		},
+		{
+			name: "no instructions on a workflow stage",
+			cfg:  config.Config{WorkflowStage: "1", WorkflowStageCount: "2", Model: "m", MaxTurns: 10},
+			want: `Stage 1 of 2 — agent works its standing prompt (m, up to 10 turns)`,
+		},
+		{
+			name: "hard-wrapped paragraph is joined before the cut",
+			cfg: config.Config{
+				Model: "m",
+				StageInstructions: "Migrate the coolstore services to\nQuarkus, one module at a time,\nand keep the tests green.\n\nSecond paragraph is not quoted.",
+			},
+			want: `Agent works the task: “Migrate the coolstore services to Quarkus, one module at a time, and keep the t…” (m)`,
 		},
 		{
 			name: "long line is cut",
@@ -442,12 +455,12 @@ func TestPlanTaskRung(t *testing.T) {
 		{
 			name: "no text, no model, no budget",
 			cfg:  config.Config{},
-			want: "Agent works the task",
+			want: "Agent works its standing prompt",
 		},
 		{
 			name: "invalid stage metadata is ignored",
 			cfg:  config.Config{WorkflowStage: "5", WorkflowStageCount: "3", Model: "m"},
-			want: "Agent works the task (m)",
+			want: "Agent works its standing prompt (m)",
 		},
 	}
 	for _, tt := range tests {
@@ -477,10 +490,10 @@ func TestPlanTaskRungRedactsTokenAcrossCutoff(t *testing.T) {
 	if !strings.Contains(got, "[redacted]") {
 		t.Fatalf("expected the redaction marker in %q", got)
 	}
-	// Same guard on the agent-prompt fallback.
+	// The agent prompt is never quoted, so a token there cannot leak.
 	cfg = &config.Config{AgentPrompt: filler + secret}
 	if got := planTaskRung(cfg, red, 0); strings.Contains(got, secret[:4]) {
-		t.Fatalf("token head leaked via the agent-prompt fallback: %q", got)
+		t.Fatalf("token from the agent prompt reached the rung: %q", got)
 	}
 }
 

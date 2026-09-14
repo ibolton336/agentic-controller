@@ -802,10 +802,9 @@ const taskSummaryMaxLen = 80
 // viewers: which stage this is, what the task asks, and the model and turn
 // budget it runs under. Before this the rung read "Agent works the stage
 // task" for every run, which told a viewer nothing the other two rungs did
-// not. The excerpt is the first line of the stage instructions (the agent
-// prompt when a run has none); both are rendered with parameter values
-// substituted, so they pass through the redactor like every other text
-// the harness publishes — in full, before the excerpt is cut.
+// not. The excerpt is the first line of the stage instructions, rendered
+// with parameter values substituted, so it passes through the redactor
+// like every other text the harness publishes — in full, before the cut.
 //
 // turnsUsed is the run's turn count so far: zero before the prompt is
 // sent ("up to N turns"), then "turn 12 of N" as the ladder is re-emitted
@@ -813,17 +812,23 @@ const taskSummaryMaxLen = 80
 // sits at ReserveFraction of it, with the rest kept for the handoff.
 func planTaskRung(cfg *config.Config, red *redactor, turnsUsed int) string {
 	var b strings.Builder
-	if stage, count, ok := workflowStagePosition(cfg); ok {
-		fmt.Fprintf(&b, "Stage %d of %d — ", stage, count)
-		b.WriteString("agent works the task")
-	} else {
-		b.WriteString("Agent works the task")
-	}
-	// Redact the whole texts BEFORE the excerpt is cut: exact-match
+	// Redact the whole text BEFORE the excerpt is cut: exact-match
 	// redaction cannot recognise a token the cutoff has split, and the
 	// leaked head would sit in the replay ring for every late viewer.
-	if excerpt := taskSummary(red.redact(cfg.StageInstructions), red.redact(cfg.AgentPrompt)); excerpt != "" {
-		fmt.Fprintf(&b, ": \u201c%s\u201d", excerpt)
+	// Only the stage instructions are quoted — what a person typed for
+	// this run. The agent prompt opens with a persona ("You are a senior
+	// Java engineer…"), which cut to a line says nothing about the work.
+	excerpt := taskSummary(red.redact(cfg.StageInstructions))
+	stage, count, staged := workflowStagePosition(cfg)
+	switch {
+	case staged && excerpt != "":
+		fmt.Fprintf(&b, "Stage %d of %d — agent works the task: \u201c%s\u201d", stage, count, excerpt)
+	case staged:
+		fmt.Fprintf(&b, "Stage %d of %d — agent works its standing prompt", stage, count)
+	case excerpt != "":
+		fmt.Fprintf(&b, "Agent works the task: \u201c%s\u201d", excerpt)
+	default:
+		b.WriteString("Agent works its standing prompt")
 	}
 	var budget string
 	switch {
@@ -850,25 +855,31 @@ func planTaskRung(cfg *config.Config, red *redactor, turnsUsed int) string {
 	return b.String()
 }
 
-// taskSummary returns the first non-empty line of the first non-empty
-// text, stripped of leading Markdown heading and list markers and cut to
-// taskSummaryMaxLen runes with an ellipsis. Empty when every text is blank.
-func taskSummary(texts ...string) string {
-	for _, text := range texts {
-		for _, line := range strings.Split(text, "\n") {
-			line = strings.TrimSpace(line)
-			line = strings.TrimLeft(line, "#*->")
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			if r := []rune(line); len(r) > taskSummaryMaxLen {
-				line = strings.TrimSpace(string(r[:taskSummaryMaxLen-1])) + "…"
-			}
-			return line
+// taskSummary returns the first paragraph of text as one line — the
+// lines up to the first blank one, joined with spaces, so hard-wrapped
+// YAML prose is not cut at its first wrap — stripped of leading Markdown
+// heading and list markers and cut to taskSummaryMaxLen runes with an
+// ellipsis. Empty when the text is blank.
+func taskSummary(text string) string {
+	var words []string
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if len(words) == 0 {
+			line = strings.TrimSpace(strings.TrimLeft(line, "#*->"))
 		}
+		if line == "" {
+			if len(words) > 0 {
+				break
+			}
+			continue
+		}
+		words = append(words, strings.Fields(line)...)
 	}
-	return ""
+	summary := strings.Join(words, " ")
+	if r := []rune(summary); len(r) > taskSummaryMaxLen {
+		summary = strings.TrimSpace(string(r[:taskSummaryMaxLen-1])) + "…"
+	}
+	return summary
 }
 
 // fetchAndWriteAnalysis writes the application's analysis insights to
