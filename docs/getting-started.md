@@ -174,6 +174,17 @@ the controller. Verify it's running:
 kubectl get pods -n agentic-controller-system
 ```
 
+> **Upgrading a running controller:** rerun `make deploy IMG=$IMG` rather
+> than restarting the pod or patching the Deployment's image. Two things are
+> versioned with the image and only `make deploy` re-applies them: the
+> manager ClusterRole, and the `SKILL_LOADER_IMAGE` env var (the image
+> carrying `/skill-loader`, normally the controller's own — kustomize keeps
+> it equal to the manager image). A bare `kubectl rollout restart` onto a
+> newer image crash-loops on the missing env var, and a stale ClusterRole
+> shows up as `Failed to watch ... forbidden` in the controller log. If you
+> manage the Deployment outside kustomize, set `SKILL_LOADER_IMAGE` to the
+> manager image yourself.
+
 Deploy the default domain resources — the SkillCards and SkillCollection
 that make up the skill catalog, plus the Agents and the
 `java-ee-to-quarkus` AgentWorkflow the UI presents for users to run
