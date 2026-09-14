@@ -440,7 +440,7 @@ func TestPlanTaskRung(t *testing.T) {
 		{
 			name: "hard-wrapped paragraph is joined before the cut",
 			cfg: config.Config{
-				Model: "m",
+				Model:             "m",
 				StageInstructions: "Migrate the coolstore services to\nQuarkus, one module at a time,\nand keep the tests green.\n\nSecond paragraph is not quoted.",
 			},
 			want: `Agent works the task: “Migrate the coolstore services to Quarkus, one module at a time, and keep the t…” (m)`,
