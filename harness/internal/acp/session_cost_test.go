@@ -422,3 +422,47 @@ func TestSendPromptReturnsConnectionLostWithPartialResultOnAbruptClose(t *testin
 		t.Errorf("TurnsUsed = %d, want >= 1 (some progress made before the disconnect)", out.result.TurnsUsed)
 	}
 }
+
+// TestSendPromptTurnHandler proves the turn handler fires once per
+// tool_call notification with the running count, and not for other
+// updates, so a caller can re-render progress as the turn advances.
+func TestSendPromptTurnHandler(t *testing.T) {
+	s := newDemuxServer(t)
+	c := s.dial(t)
+	sc := NewSessionClient(c)
+	var seen []int
+	sc.SetTurnHandler(func(n int) { seen = append(seen, n) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	done := make(chan struct{})
+	var result *PromptResult
+	var sendErr error
+	go func() {
+		result, sendErr = sc.SendPrompt(ctx, "s1", []ContentBlock{{Type: "text", Text: "go"}}, 0)
+		close(done)
+	}()
+
+	promptReq := s.next()
+	promptID := int64(promptReq["id"].(float64))
+
+	toolCall := func(id string) string {
+		return `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"` + id + `","title":"read","status":"pending"}}}`
+	}
+	s.push(toolCall("t1"))
+	s.push(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"completed"}}}`)
+	s.push(usageUpdateFrame("s1", 1000, 200000, "0.10"))
+	s.push(toolCall("t2"))
+	s.push(`{"jsonrpc":"2.0","id":` + jsonInt(promptID) + `,"result":{"stopReason":"end_turn"}}`)
+	<-done
+	if sendErr != nil {
+		t.Fatalf("SendPrompt: %v", sendErr)
+	}
+	if result.TurnsUsed != 2 {
+		t.Errorf("TurnsUsed = %d, want 2", result.TurnsUsed)
+	}
+	if len(seen) != 2 || seen[0] != 1 || seen[1] != 2 {
+		t.Errorf("turn handler saw %v, want [1 2]", seen)
+	}
+}

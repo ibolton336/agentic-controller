@@ -350,7 +350,9 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 	// Harness lifecycle → viewer status frames, in standard ACP
 	// vocabulary. Everything is a no-op without a live tee.
 	prepRung := planPrepRung(creds.RepoURL, creds.Branch, insightCount, red)
-	taskRung := planTaskRung(cfg, red)
+	// turnsSeen is the run's turn count so far across the primary prompt
+	// and the handoff; the task rung re-renders with it on every turn.
+	var turnsSeen atomic.Int64
 	emitPlan := func(prep, agentRun, finish string) {
 		if teeSrv == nil {
 			return
@@ -362,7 +364,7 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 			"sessionUpdate": "plan",
 			"entries": []map[string]any{
 				entry(prepRung, prep),
-				entry(taskRung, agentRun),
+				entry(planTaskRung(cfg, red, int(turnsSeen.Load())), agentRun),
 				entry(fmt.Sprintf("Push results to branch %s", creds.Branch), finish),
 			},
 		})
@@ -433,9 +435,23 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 	if teeSrv != nil {
 		teeSrv.SetRunActive(true)
 	}
+	// Each turn re-emits the ladder so the task rung shows progress
+	// against the budget instead of one spinner for the whole turn. The
+	// handler fires from SendPrompt's own goroutine between
+	// notifications; turnBase carries the primary's count into the
+	// handoff prompt, whose result counts from zero again.
+	turnBase := 0
+	session.SetTurnHandler(func(n int) {
+		turnsSeen.Store(int64(turnBase + n))
+		emitPlan("completed", "in_progress", "pending")
+	})
 	primaryResult, err := session.SendPrompt(ctx, sessionID, []acp.ContentBlock{
 		{Type: "text", Text: stagePrompt},
 	}, cfg.CostLimit)
+	if primaryResult != nil {
+		turnBase = primaryResult.TurnsUsed
+		turnsSeen.Store(int64(turnBase))
+	}
 	if teeSrv != nil {
 		teeSrv.SetRunActive(false)
 	}
@@ -790,7 +806,12 @@ const taskSummaryMaxLen = 80
 // prompt when a run has none); both are rendered with parameter values
 // substituted, so it passes through the redactor like every other text
 // the harness publishes.
-func planTaskRung(cfg *config.Config, red *redactor) string {
+//
+// turnsUsed is the run's turn count so far: zero before the prompt is
+// sent ("up to N turns"), then "turn 12 of N" as the ladder is re-emitted
+// per turn. N is the configured budget; the runtime's native ceiling
+// sits at ReserveFraction of it, with the rest kept for the handoff.
+func planTaskRung(cfg *config.Config, red *redactor, turnsUsed int) string {
 	var b strings.Builder
 	if stage, count, ok := workflowStagePosition(cfg); ok {
 		fmt.Fprintf(&b, "Stage %d of %d — ", stage, count)
@@ -801,17 +822,26 @@ func planTaskRung(cfg *config.Config, red *redactor) string {
 	if excerpt := taskSummary(cfg.StageInstructions, cfg.AgentPrompt); excerpt != "" {
 		fmt.Fprintf(&b, ": \u201c%s\u201d", red.redact(excerpt))
 	}
-	if cfg.Model != "" || cfg.MaxTurns > 0 {
+	var budget string
+	switch {
+	case turnsUsed > 0 && cfg.MaxTurns > 0:
+		budget = fmt.Sprintf("turn %d of %d", turnsUsed, cfg.MaxTurns)
+	case turnsUsed == 1:
+		budget = "1 turn"
+	case turnsUsed > 1:
+		budget = fmt.Sprintf("%d turns", turnsUsed)
+	case cfg.MaxTurns > 0:
+		budget = fmt.Sprintf("up to %d turns", cfg.MaxTurns)
+	}
+	if cfg.Model != "" || budget != "" {
 		b.WriteString(" (")
 		if cfg.Model != "" {
 			b.WriteString(cfg.Model)
-			if cfg.MaxTurns > 0 {
+			if budget != "" {
 				b.WriteString(", ")
 			}
 		}
-		if cfg.MaxTurns > 0 {
-			fmt.Fprintf(&b, "up to %d turns", cfg.MaxTurns)
-		}
+		b.WriteString(budget)
 		b.WriteString(")")
 	}
 	return b.String()

@@ -37,6 +37,9 @@ type SessionClient struct {
 	// hitlUnanswered latches when an ask_user question went unanswered, so
 	// runStage fails the run instead of letting the model guess past it.
 	hitlUnanswered atomic.Bool
+
+	turnMu      sync.Mutex
+	turnHandler func(turnsUsed int)
 }
 
 // NewSessionClient creates a session client from an existing WebSocket
@@ -81,6 +84,25 @@ func (c *SessionClient) SetPermissionForwarder(f PermissionForwarder) {
 	c.fwdMu.Lock()
 	c.forwarder = f
 	c.fwdMu.Unlock()
+}
+
+// SetTurnHandler registers a callback invoked from SendPrompt each time
+// the turn count advances (one tool_call notification = one turn, the
+// same measure TurnsUsed reports). It runs on SendPrompt's goroutine
+// between notifications, so it must return promptly. nil clears it.
+func (c *SessionClient) SetTurnHandler(fn func(turnsUsed int)) {
+	c.turnMu.Lock()
+	c.turnHandler = fn
+	c.turnMu.Unlock()
+}
+
+func (c *SessionClient) turnAdvanced(turnsUsed int) {
+	c.turnMu.Lock()
+	fn := c.turnHandler
+	c.turnMu.Unlock()
+	if fn != nil {
+		fn(turnsUsed)
+	}
 }
 
 func (c *SessionClient) permissionForwarder() PermissionForwarder {
@@ -423,6 +445,7 @@ func (c *SessionClient) SendPrompt(ctx context.Context, sessionID string, conten
 	process := func(n *RPCResponse) {
 		if isToolCall(n) {
 			result.TurnsUsed++
+			c.turnAdvanced(result.TurnsUsed)
 		}
 		handlePromptNotification(n, result)
 		trackUsage(n, result, &sawCost)

@@ -384,10 +384,29 @@ func TestFetchAndWriteAnalysis(t *testing.T) {
 
 func TestPlanTaskRung(t *testing.T) {
 	tests := []struct {
-		name string
-		cfg  config.Config
-		want string
+		name  string
+		cfg   config.Config
+		turns int
+		want  string
 	}{
+		{
+			name:  "progress against the budget",
+			cfg:   config.Config{Model: "m", MaxTurns: 40},
+			turns: 12,
+			want:  "Agent works the task (m, turn 12 of 40)",
+		},
+		{
+			name:  "progress without a budget",
+			cfg:   config.Config{Model: "m"},
+			turns: 12,
+			want:  "Agent works the task (m, 12 turns)",
+		},
+		{
+			name:  "first turn without a budget",
+			cfg:   config.Config{},
+			turns: 1,
+			want:  "Agent works the task (1 turn)",
+		},
 		{
 			name: "standalone run with instructions",
 			cfg: config.Config{
@@ -433,7 +452,7 @@ func TestPlanTaskRung(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := planTaskRung(&tt.cfg, nil); got != tt.want {
+			if got := planTaskRung(&tt.cfg, nil, tt.turns); got != tt.want {
 				t.Errorf("planTaskRung() =\n  %q\nwant\n  %q", got, tt.want)
 			}
 		})
@@ -443,7 +462,7 @@ func TestPlanTaskRung(t *testing.T) {
 func TestPlanTaskRungRedactsSecrets(t *testing.T) {
 	red := &redactor{secrets: []string{"ghp_supersecrettoken"}}
 	cfg := &config.Config{StageInstructions: "Push using ghp_supersecrettoken to the fork."}
-	got := planTaskRung(cfg, red)
+	got := planTaskRung(cfg, red, 0)
 	if strings.Contains(got, "ghp_supersecrettoken") {
 		t.Fatalf("secret leaked into plan rung: %q", got)
 	}
