@@ -2,6 +2,9 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: tackle-hub-agentic
+# Verbs are the ones Hub's agentic API issues (tackle2-hub
+# internal/api/agentic.go). Hub reaches these resources through a direct
+# client, not an informer, so nothing here needs watch, and it never patches.
 rules:
   # The agentic API surface Hub serves to the UI.
   - apiGroups:
@@ -17,22 +20,21 @@ rules:
     verbs:
       - get
       - list
-      - watch
       - create
       - update
-      - patch
       - delete
-  # Hub reads the ACP secret to mint connection nonces and creates the
-  # per-run token Secrets it hands to AgentRuns via secretRef.
+  # Secrets: Hub gets the ACP secret named in AgentRun.status.secretKeyRef to
+  # mint connection nonces, and creates a per-run HUB_TOKEN Secret
+  # (generateName agentic-run-) that it updates with an ownerReference and
+  # deletes again if the run itself fails to create. Both names are chosen at
+  # run time, so resourceNames cannot pin this rule; get stays namespace-wide
+  # but nothing here lets Hub enumerate Secrets.
   - apiGroups:
       - ""
     resources:
       - secrets
     verbs:
       - get
-      - list
-      - watch
       - create
       - update
-      - patch
       - delete

@@ -61,11 +61,12 @@ done
 kubectl -n "${KONVEYOR_NS}" rollout status deployment/tackle-hub --timeout="${TIMEOUT}"
 
 # Hub serves the agentic API (/hub/agentic/*) by reading konveyor.io resources
-# from its own namespace, and the operator does not yet grant its ServiceAccount
-# access to them. Without this Role every agentic page in the UI 500s with
-# "... is forbidden ... in the namespace ${KONVEYOR_NS}". The manifests default
-# to konveyor-tackle; substitute the target namespace (RBAC requires it on the
-# ServiceAccount subject, so a plain -n is not enough).
+# from its own namespace. The operator grants its ServiceAccount access to them
+# since konveyor/operator#614 (v0.11.0-alpha.4), but the commit pinned above
+# predates that, so grant it here. Without the Role every agentic page in the
+# UI 500s with "... is forbidden ... in the namespace ${KONVEYOR_NS}". The
+# manifests default to konveyor-tackle; substitute the target namespace (RBAC
+# requires it on the ServiceAccount subject, so a plain -n is not enough).
 echo "=== Granting Hub access to agentic resources in ${KONVEYOR_NS} ==="
 kubectl kustomize "$(dirname "$0")/../config/hub-rbac" \
     | sed "s/konveyor-tackle/${KONVEYOR_NS}/g" \

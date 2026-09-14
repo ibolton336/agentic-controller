@@ -7,17 +7,24 @@
 # namespace or the UI gets a 500 ("... is forbidden ... in the namespace
 # konveyor-tackle") for every agentic page.
 #
-# Apply into the Hub namespace:
+# Apply into the Hub namespace. The `namespace:` below is only a default: the
+# RoleBinding subject's namespace is rewritten neither by `kubectl apply -n`
+# nor by `kustomize edit set namespace`, so render and substitute instead.
+# This is the one invocation, for the default namespace too, and it is what
+# hack/install-konveyor.sh runs after Hub comes up:
 #
-#   kubectl apply -k config/hub-rbac/ -n konveyor-tackle
+#   kubectl kustomize config/hub-rbac/ \
+#     | sed "s/konveyor-tackle/${KONVEYOR_NS}/g" \
+#     | kubectl apply -f -
 #
-# hack/install-konveyor.sh does this after Hub comes up. Longer term this grant
-# belongs to konveyor/operator alongside the Hub Deployment it authorizes; until
-# the operator ships it, this directory is the single definition.
+# The operator grants the same access itself since konveyor/operator#614
+# (v0.11.0-alpha.4). This directory covers the older operator commit the
+# install script pins and Hubs installed by other means; RBAC is additive, so
+# applying it next to a newer operator's Role is harmless.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-# Default Hub namespace. To target another namespace, render and substitute --
-# see hack/install-konveyor.sh.
+# Default Hub namespace. To target another namespace, render and substitute
+# as shown above.
 namespace: konveyor-tackle
 resources:
   - role.yaml

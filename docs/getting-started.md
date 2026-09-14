@@ -96,9 +96,10 @@ Hub is where the agentic resources live and what the UI talks to. Install
 it before creating any Gateway or Agent so there is a namespace to put
 them in. `hack/install-konveyor.sh` installs the tackle2-operator via its
 Helm chart, waits for Hub, and grants Hub's ServiceAccount access to the
-`konveyor.io` resources in its namespace (`config/hub-rbac/` — the
-operator does not do this yet, see
-[konveyor/operator#615](https://github.com/konveyor/operator/issues/615)):
+`konveyor.io` resources in its namespace (`config/hub-rbac/`). Operators
+from [konveyor/operator#614](https://github.com/konveyor/operator/pull/614)
+(v0.11.0-alpha.4) on grant this themselves; the script pins an older commit,
+and the grant is harmless next to a newer one:
 
 ```bash
 export KONVEYOR_NS=konveyor-tackle   # the script's default; change both together
@@ -116,8 +117,10 @@ your context default instead and drop the flag:
 kubectl config set-context --current --namespace="$KONVEYOR_NS"
 ```
 
-Already have a Hub? Skip the install but still grant the RBAC, replacing
-`konveyor-tackle` with your Hub's namespace in both places:
+Already have a Hub? Skip the install but still grant the RBAC (needed for
+operators before v0.11.0-alpha.4, harmless after). This is the one way to
+apply `config/hub-rbac/`: the RoleBinding names the ServiceAccount's
+namespace, which `-n` does not rewrite, so render and substitute:
 
 ```bash
 kubectl kustomize config/hub-rbac/ \
@@ -511,7 +514,7 @@ nothing here is auto-installed:
 
 **Defaults** (`config/defaults/`) are the curated content the operator
 installs on enable — the skill catalog plus the Agents and AgentWorkflow
-the UI runs. Apply them with `kubectl apply -k config/defaults/`:
+the UI runs. Apply them with `kubectl apply -k config/defaults/ -n "$KONVEYOR_NS"`:
 
 | File | Kind | Description |
 |------|------|-------------|
@@ -578,11 +581,12 @@ controller behind `spec.agentic_enabled` on the Tackle CR — see the
 operator path in step 3. On every merge to `main`, the
 `sync-operator` workflow renders this repo's CRDs, controller RBAC, and
 `config/defaults/` into a PR against the operator, so what the operator
-installs is what this repo defines. Two things the operator does not do
-yet: grant Hub's ServiceAccount the `konveyor.io` RBAC
-([konveyor/operator#615](https://github.com/konveyor/operator/issues/615),
-covered by `config/hub-rbac/` here), and resolve the Agent Sandbox
-dependency — install it yourself (step 1). The kustomize / `dist/install.yaml`
+installs is what this repo defines. Hub's ServiceAccount gets the
+`konveyor.io` RBAC from the operator as of
+[konveyor/operator#614](https://github.com/konveyor/operator/pull/614)
+(v0.11.0-alpha.4); `config/hub-rbac/` here covers older operators. One thing
+the operator does not do yet is resolve the Agent Sandbox dependency —
+install it yourself (step 1). The kustomize / `dist/install.yaml`
 path in step 3 remains the way to run a controller build the operator does
 not ship.
 
@@ -646,8 +650,8 @@ has no Hub token. Recreate those runs through the UI or Hub's API.
 
 The Agent references Gateways or SkillCards that don't exist or
 aren't ready. Check:
-- `kubectl get gateways.konveyor.io` — all referenced gateways must exist
-- `kubectl get skillcards` — all referenced skills must be resolved
+- `kubectl get gateways.konveyor.io -n "$KONVEYOR_NS"` — all referenced gateways must exist
+- `kubectl get skillcards -n "$KONVEYOR_NS"` — all referenced skills must be resolved
 
 **AgentRun stuck in `Pending`**
 
