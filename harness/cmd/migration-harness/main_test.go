@@ -381,3 +381,73 @@ func TestFetchAndWriteAnalysis(t *testing.T) {
 		t.Errorf("unexpected content: %s", string(data))
 	}
 }
+
+func TestPlanTaskRung(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  config.Config
+		want string
+	}{
+		{
+			name: "standalone run with instructions",
+			cfg: config.Config{
+				Model: "claude-sonnet-4-5", MaxTurns: 40,
+				StageInstructions: "Assess the coolstore repository for Quarkus migration.\nList blockers.",
+			},
+			want: `Agent works the task: “Assess the coolstore repository for Quarkus migration.” (claude-sonnet-4-5, up to 40 turns)`,
+		},
+		{
+			name: "workflow stage prefix",
+			cfg: config.Config{
+				WorkflowStage: "2", WorkflowStageCount: "3",
+				Model: "gemini-2.5-pro", MaxTurns: 200,
+				StageInstructions: "## Remediate\n\nFix the findings from the assess stage.",
+			},
+			want: `Stage 2 of 3 — agent works the task: “Remediate” (gemini-2.5-pro, up to 200 turns)`,
+		},
+		{
+			name: "falls back to the agent prompt",
+			cfg: config.Config{
+				Model:       "m",
+				AgentPrompt: "\n\n- You are a Java migration agent.",
+			},
+			want: `Agent works the task: “You are a Java migration agent.” (m)`,
+		},
+		{
+			name: "long line is cut",
+			cfg: config.Config{
+				StageInstructions: strings.Repeat("word ", 40),
+			},
+			want: `Agent works the task: “` + strings.TrimSpace(strings.Repeat("word ", 40)[:79]) + `…”`,
+		},
+		{
+			name: "no text, no model, no budget",
+			cfg:  config.Config{},
+			want: "Agent works the task",
+		},
+		{
+			name: "invalid stage metadata is ignored",
+			cfg:  config.Config{WorkflowStage: "5", WorkflowStageCount: "3", Model: "m"},
+			want: "Agent works the task (m)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := planTaskRung(&tt.cfg, nil); got != tt.want {
+				t.Errorf("planTaskRung() =\n  %q\nwant\n  %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPlanTaskRungRedactsSecrets(t *testing.T) {
+	red := &redactor{secrets: []string{"ghp_supersecrettoken"}}
+	cfg := &config.Config{StageInstructions: "Push using ghp_supersecrettoken to the fork."}
+	got := planTaskRung(cfg, red)
+	if strings.Contains(got, "ghp_supersecrettoken") {
+		t.Fatalf("secret leaked into plan rung: %q", got)
+	}
+	if !strings.Contains(got, "[redacted]") {
+		t.Fatalf("expected redaction marker in %q", got)
+	}
+}

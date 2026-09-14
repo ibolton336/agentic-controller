@@ -343,6 +343,7 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 
 	// Harness lifecycle → viewer status frames, in standard ACP
 	// vocabulary. Everything is a no-op without a live tee.
+	taskRung := planTaskRung(cfg, red)
 	emitPlan := func(prep, agentRun, finish string) {
 		if teeSrv == nil {
 			return
@@ -354,7 +355,7 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 			"sessionUpdate": "plan",
 			"entries": []map[string]any{
 				entry("Prepare workspace: clone, branch, grounding data", prep),
-				entry("Agent works the stage task", agentRun),
+				entry(taskRung, agentRun),
 				entry(fmt.Sprintf("Push results to branch %s", creds.Branch), finish),
 			},
 		})
@@ -701,22 +702,91 @@ func parseHubTokenID(cfg *config.Config) (uint, bool) {
 	return uint(tokenID), true
 }
 
+// workflowStagePosition returns this run's 1-based stage index and the
+// workflow's stage count. ok is false for standalone runs (both values
+// empty) and for metadata that does not describe a position: non-numeric,
+// zero, or an index past the count.
+func workflowStagePosition(cfg *config.Config) (stage, count uint64, ok bool) {
+	if cfg.WorkflowStage == "" || cfg.WorkflowStageCount == "" {
+		return 0, 0, false
+	}
+	stage, err := strconv.ParseUint(cfg.WorkflowStage, 10, 64)
+	if err != nil || stage == 0 {
+		return 0, 0, false
+	}
+	count, err = strconv.ParseUint(cfg.WorkflowStageCount, 10, 64)
+	if err != nil || count == 0 || stage > count {
+		return 0, 0, false
+	}
+	return stage, count, true
+}
+
 // isIntermediateWorkflowStage reports whether the harness is running an
 // intermediate (not last) stage of a multi-stage workflow. Returns false
 // for standalone runs, last stages, and invalid metadata.
 func isIntermediateWorkflowStage(cfg *config.Config) bool {
-	if cfg.WorkflowStage == "" || cfg.WorkflowStageCount == "" {
-		return false
+	stage, count, ok := workflowStagePosition(cfg)
+	return ok && stage < count
+}
+
+// taskSummaryMaxLen bounds the task excerpt on the plan rung: one line of
+// the viewer's ladder, not the whole stage prompt.
+const taskSummaryMaxLen = 80
+
+// planTaskRung is the middle rung of the plan ladder the harness shows
+// viewers: which stage this is, what the task asks, and the model and turn
+// budget it runs under. Before this the rung read "Agent works the stage
+// task" for every run, which told a viewer nothing the other two rungs did
+// not. The excerpt is the first line of the stage instructions (the agent
+// prompt when a run has none); both are rendered with parameter values
+// substituted, so it passes through the redactor like every other text
+// the harness publishes.
+func planTaskRung(cfg *config.Config, red *redactor) string {
+	var b strings.Builder
+	if stage, count, ok := workflowStagePosition(cfg); ok {
+		fmt.Fprintf(&b, "Stage %d of %d — ", stage, count)
+		b.WriteString("agent works the task")
+	} else {
+		b.WriteString("Agent works the task")
 	}
-	stage, err := strconv.ParseUint(cfg.WorkflowStage, 10, 64)
-	if err != nil || stage == 0 {
-		return false
+	if excerpt := taskSummary(cfg.StageInstructions, cfg.AgentPrompt); excerpt != "" {
+		fmt.Fprintf(&b, ": \u201c%s\u201d", red.redact(excerpt))
 	}
-	count, err := strconv.ParseUint(cfg.WorkflowStageCount, 10, 64)
-	if err != nil || count == 0 {
-		return false
+	if cfg.Model != "" || cfg.MaxTurns > 0 {
+		b.WriteString(" (")
+		if cfg.Model != "" {
+			b.WriteString(cfg.Model)
+			if cfg.MaxTurns > 0 {
+				b.WriteString(", ")
+			}
+		}
+		if cfg.MaxTurns > 0 {
+			fmt.Fprintf(&b, "up to %d turns", cfg.MaxTurns)
+		}
+		b.WriteString(")")
 	}
-	return stage < count
+	return b.String()
+}
+
+// taskSummary returns the first non-empty line of the first non-empty
+// text, stripped of leading Markdown heading and list markers and cut to
+// taskSummaryMaxLen runes with an ellipsis. Empty when every text is blank.
+func taskSummary(texts ...string) string {
+	for _, text := range texts {
+		for _, line := range strings.Split(text, "\n") {
+			line = strings.TrimSpace(line)
+			line = strings.TrimLeft(line, "#*->")
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if r := []rune(line); len(r) > taskSummaryMaxLen {
+				line = strings.TrimSpace(string(r[:taskSummaryMaxLen-1])) + "…"
+			}
+			return line
+		}
+	}
+	return ""
 }
 
 func fetchAndWriteAnalysis(hubClient *hub.Client, appIDStr string, workDir string) error {
