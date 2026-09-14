@@ -367,7 +367,7 @@ func TestFetchAndWriteAnalysis(t *testing.T) {
 
 	workDir := t.TempDir()
 	hubClient := hub.NewClient(server.URL, "token")
-	err := fetchAndWriteAnalysis(hubClient, "42", workDir)
+	_, err := fetchAndWriteAnalysis(hubClient, "42", workDir)
 	if err != nil {
 		t.Fatalf("fetchAndWriteAnalysis failed: %v", err)
 	}
@@ -449,5 +449,53 @@ func TestPlanTaskRungRedactsSecrets(t *testing.T) {
 	}
 	if !strings.Contains(got, "[redacted]") {
 		t.Fatalf("expected redaction marker in %q", got)
+	}
+}
+
+func TestPlanPrepRung(t *testing.T) {
+	tests := []struct {
+		name    string
+		repoURL string
+		branch  string
+		count   int
+		want    string
+	}{
+		{
+			name:    "repo, branch and insights",
+			repoURL: "https://github.com/konveyor/coolstore.git", branch: "migration-1", count: 49,
+			want: "Prepare workspace: github.com/konveyor/coolstore on branch migration-1, 49 analysis insights",
+		},
+		{
+			name:    "embedded credentials are dropped",
+			repoURL: "https://user:ghp_supersecrettoken@github.com/konveyor/coolstore", branch: "b", count: -1,
+			want: "Prepare workspace: github.com/konveyor/coolstore on branch b",
+		},
+		{
+			name:    "zero insights is said, unfetched is not",
+			repoURL: "https://github.com/k/r", branch: "b", count: 0,
+			want: "Prepare workspace: github.com/k/r on branch b, no analysis insights",
+		},
+		{
+			name:    "single insight",
+			repoURL: "https://github.com/k/r", branch: "b", count: 1,
+			want: "Prepare workspace: github.com/k/r on branch b, 1 analysis insight",
+		},
+		{
+			name:    "unparseable url falls back to clone",
+			repoURL: "::not a url", branch: "b", count: -1,
+			want: "Prepare workspace: clone on branch b",
+		},
+		{
+			name:  "nothing known",
+			count: -1,
+			want:  "Prepare workspace: clone",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := planPrepRung(tt.repoURL, tt.branch, tt.count, nil); got != tt.want {
+				t.Errorf("planPrepRung() =\n  %q\nwant\n  %q", got, tt.want)
+			}
+		})
 	}
 }

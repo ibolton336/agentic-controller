@@ -1,5 +1,7 @@
 kind: enhancement
 description: >
-  The harness's viewer plan ladder now names the workflow stage position,
+  The harness's viewer plan ladder now names the repository, branch and
+  analysis insight count on its first rung and the workflow stage position,
   the first line of the stage task and the model and turn budget on its
-  middle rung, instead of "Agent works the stage task" for every run.
+  middle rung, instead of fixed text for every run; push tool calls name
+  the branch they push to.

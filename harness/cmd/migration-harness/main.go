@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -240,6 +241,9 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 		logging.Info("always-loaded rules: %s", strings.Join(names, ", "))
 	}
 
+	// Grounding data the first plan rung reports: -1 until the analysis
+	// was actually fetched (skills are what consume it).
+	insightCount := -1
 	if hasSkills {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -253,8 +257,10 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 		// 4b. Write analysis to workspace (if resolved from Hub). Uncommitted:
 		// the entry point never commits files itself; all commits are authored
 		// by the agent.
-		if err := fetchAndWriteAnalysis(hubClient, cfg.AppID, cloneDir); err != nil {
+		if n, err := fetchAndWriteAnalysis(hubClient, cfg.AppID, cloneDir); err != nil {
 			logging.Warn("analysis fetch: %v", err)
+		} else {
+			insightCount = n
 		}
 	}
 
@@ -343,6 +349,7 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 
 	// Harness lifecycle → viewer status frames, in standard ACP
 	// vocabulary. Everything is a no-op without a live tee.
+	prepRung := planPrepRung(creds.RepoURL, creds.Branch, insightCount, red)
 	taskRung := planTaskRung(cfg, red)
 	emitPlan := func(prep, agentRun, finish string) {
 		if teeSrv == nil {
@@ -354,7 +361,7 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 		teeSrv.EmitRunUpdate(map[string]any{
 			"sessionUpdate": "plan",
 			"entries": []map[string]any{
-				entry("Prepare workspace: clone, branch, grounding data", prep),
+				entry(prepRung, prep),
 				entry(taskRung, agentRun),
 				entry(fmt.Sprintf("Push results to branch %s", creds.Branch), finish),
 			},
@@ -403,7 +410,7 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 
 	// 8. Start filesystem watcher BEFORE blocking prompt
 	pushFn := func() error {
-		_, err := emitPush("git push (auto-commit watcher)", func() (bool, error) {
+		_, err := emitPush(fmt.Sprintf("git push to branch %s (auto-commit watcher)", creds.Branch), func() (bool, error) {
 			return git.Push(ctx, creds, repo, creds.Branch, baseSHA)
 		})
 		return err
@@ -521,7 +528,7 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 	logging.Header("Final Push")
 	pushCtx, pushCancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer pushCancel()
-	pushed, pushErr := emitPush("git push (final)", func() (bool, error) {
+	pushed, pushErr := emitPush(fmt.Sprintf("git push to branch %s (final)", creds.Branch), func() (bool, error) {
 		return git.Push(pushCtx, creds, repo, creds.Branch, baseSHA)
 	})
 	if pushErr != nil {
@@ -729,6 +736,48 @@ func isIntermediateWorkflowStage(cfg *config.Config) bool {
 	return ok && stage < count
 }
 
+// planPrepRung is the first rung of the plan ladder: what the workspace
+// holds by the time viewers can attach. insightCount < 0 means the
+// analysis was not fetched (a run without skills has no consumer for it),
+// so the rung says nothing about it rather than claiming zero.
+func planPrepRung(repoURL, branch string, insightCount int, red *redactor) string {
+	var b strings.Builder
+	b.WriteString("Prepare workspace: ")
+	if repo := repoDisplayName(repoURL); repo != "" {
+		b.WriteString(red.redact(repo))
+	} else {
+		b.WriteString("clone")
+	}
+	if branch != "" {
+		fmt.Fprintf(&b, " on branch %s", branch)
+	}
+	switch {
+	case insightCount < 0:
+	case insightCount == 0:
+		b.WriteString(", no analysis insights")
+	case insightCount == 1:
+		b.WriteString(", 1 analysis insight")
+	default:
+		fmt.Fprintf(&b, ", %d analysis insights", insightCount)
+	}
+	return b.String()
+}
+
+// repoDisplayName reduces a clone URL to host and path for a viewer:
+// scheme, embedded credentials and a trailing .git dropped. Empty when
+// the URL is empty or does not parse.
+func repoDisplayName(rawURL string) string {
+	if rawURL == "" {
+		return ""
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	name := u.Host + strings.TrimSuffix(strings.TrimRight(u.Path, "/"), ".git")
+	return name
+}
+
 // taskSummaryMaxLen bounds the task excerpt on the plan rung: one line of
 // the viewer's ladder, not the whole stage prompt.
 const taskSummaryMaxLen = 80
@@ -789,37 +838,39 @@ func taskSummary(texts ...string) string {
 	return ""
 }
 
-func fetchAndWriteAnalysis(hubClient *hub.Client, appIDStr string, workDir string) error {
+// fetchAndWriteAnalysis writes the application's analysis insights to
+// .konveyor/analysis.json in the workspace and returns how many there were.
+func fetchAndWriteAnalysis(hubClient *hub.Client, appIDStr string, workDir string) (int, error) {
 	appID, err := hub.ParseAppID(appIDStr)
 	if err != nil {
-		return fmt.Errorf("invalid APP_ID %q: %w", appIDStr, err)
+		return 0, fmt.Errorf("invalid APP_ID %q: %w", appIDStr, err)
 	}
 	insights, err := hubClient.FetchAnalysis(appID)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if len(insights) == 0 {
 		logging.Info("no analysis results for app %s", appIDStr)
-		return nil
+		return 0, nil
 	}
 
 	analysisDir := filepath.Join(workDir, ".konveyor")
 	if err := os.MkdirAll(analysisDir, 0o755); err != nil {
-		return fmt.Errorf("create .konveyor dir: %w", err)
+		return 0, fmt.Errorf("create .konveyor dir: %w", err)
 	}
 
 	data, err := json.MarshalIndent(insights, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal analysis: %w", err)
+		return 0, fmt.Errorf("marshal analysis: %w", err)
 	}
 
 	analysisPath := filepath.Join(analysisDir, "analysis.json")
 	if err := os.WriteFile(analysisPath, data, 0o644); err != nil {
-		return fmt.Errorf("write analysis: %w", err)
+		return 0, fmt.Errorf("write analysis: %w", err)
 	}
 
 	logging.Ok("wrote %d analysis insights to %s", len(insights), analysisPath)
-	return nil
+	return len(insights), nil
 }
 
 // closingMessageLimit bounds what a closing message adds to the pod log.
