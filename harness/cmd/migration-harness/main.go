@@ -804,8 +804,8 @@ const taskSummaryMaxLen = 80
 // task" for every run, which told a viewer nothing the other two rungs did
 // not. The excerpt is the first line of the stage instructions (the agent
 // prompt when a run has none); both are rendered with parameter values
-// substituted, so it passes through the redactor like every other text
-// the harness publishes.
+// substituted, so they pass through the redactor like every other text
+// the harness publishes — in full, before the excerpt is cut.
 //
 // turnsUsed is the run's turn count so far: zero before the prompt is
 // sent ("up to N turns"), then "turn 12 of N" as the ladder is re-emitted
@@ -819,8 +819,11 @@ func planTaskRung(cfg *config.Config, red *redactor, turnsUsed int) string {
 	} else {
 		b.WriteString("Agent works the task")
 	}
-	if excerpt := taskSummary(cfg.StageInstructions, cfg.AgentPrompt); excerpt != "" {
-		fmt.Fprintf(&b, ": \u201c%s\u201d", red.redact(excerpt))
+	// Redact the whole texts BEFORE the excerpt is cut: exact-match
+	// redaction cannot recognise a token the cutoff has split, and the
+	// leaked head would sit in the replay ring for every late viewer.
+	if excerpt := taskSummary(red.redact(cfg.StageInstructions), red.redact(cfg.AgentPrompt)); excerpt != "" {
+		fmt.Fprintf(&b, ": \u201c%s\u201d", excerpt)
 	}
 	var budget string
 	switch {

@@ -459,6 +459,31 @@ func TestPlanTaskRung(t *testing.T) {
 	}
 }
 
+// TestPlanTaskRungRedactsTokenAcrossCutoff places a known token so the
+// 80-rune excerpt cutoff falls inside it. Redacting after the cut would
+// leave the token's head in the rung (and in the tee's replay ring).
+func TestPlanTaskRungRedactsTokenAcrossCutoff(t *testing.T) {
+	const secret = "ghp_supersecrettoken1234567890"
+	red := &redactor{secrets: []string{secret}}
+	// 60 runes of filler, then the 30-rune token: the cut at 79 lands
+	// nineteen runes into it, while the "[redacted]" marker that replaces
+	// it still fits inside the excerpt.
+	filler := strings.Repeat("x", 60)
+	cfg := &config.Config{StageInstructions: filler + secret + " and more text after it."}
+	got := planTaskRung(cfg, red, 0)
+	if strings.Contains(got, secret[:4]) {
+		t.Fatalf("token head leaked past the excerpt cutoff: %q", got)
+	}
+	if !strings.Contains(got, "[redacted]") {
+		t.Fatalf("expected the redaction marker in %q", got)
+	}
+	// Same guard on the agent-prompt fallback.
+	cfg = &config.Config{AgentPrompt: filler + secret}
+	if got := planTaskRung(cfg, red, 0); strings.Contains(got, secret[:4]) {
+		t.Fatalf("token head leaked via the agent-prompt fallback: %q", got)
+	}
+}
+
 func TestPlanTaskRungRedactsSecrets(t *testing.T) {
 	red := &redactor{secrets: []string{"ghp_supersecrettoken"}}
 	cfg := &config.Config{StageInstructions: "Push using ghp_supersecrettoken to the fork."}
