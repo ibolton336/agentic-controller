@@ -83,6 +83,26 @@ func TestSetTerminalOutcome(t *testing.T) {
 			wantMessage:    "source is not a git repository",
 		},
 		{
+			// #231: the harness's termination log is the ADR 0011 JSON blob;
+			// its stopReason is the sentence for the condition message.
+			name:           "failure shows the termination blob's stopReason, not the JSON",
+			pod:            podWithExit(1, ""),
+			failureMessage: `{"exitCode":1,"outcome":"failed","stopReason":"provider error: Ran into this error: Failed to call Bedrock: The security token included in the request is invalid.","usage":{"turnsUsed":0}}`,
+			wantPhase:      konveyoriov1alpha1.AgentRunPhaseFailed,
+			wantStatus:     metav1.ConditionFalse,
+			wantReason:     konveyoriov1alpha1.AgentRunReasonFailed,
+			wantMessage:    "provider error: Ran into this error: Failed to call Bedrock: The security token included in the request is invalid.",
+		},
+		{
+			name:           "termination blob without stopReason keeps the generic message",
+			pod:            podWithExit(1, ""),
+			failureMessage: `{"exitCode":1,"outcome":"failed"}`,
+			wantPhase:      konveyoriov1alpha1.AgentRunPhaseFailed,
+			wantStatus:     metav1.ConditionFalse,
+			wantReason:     konveyoriov1alpha1.AgentRunReasonFailed,
+			wantMessage:    "Agent exited with code 1",
+		},
+		{
 			name:       "exit 2 is limit reached (remapped from failed pod)",
 			pod:        podWithExit(2, ""),
 			wantPhase:  konveyoriov1alpha1.AgentRunPhaseFailed,

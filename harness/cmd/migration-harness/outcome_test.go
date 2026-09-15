@@ -34,9 +34,34 @@ func TestClassifyOutcome(t *testing.T) {
 		result         *acp.PromptResult
 		err            error
 		nativeMaxTurns int
+		providerError  bool
 		wantOut        outcome
 		wantLimit      limitKind
 	}{
+		{
+			// #231: goose renders a refused model call as prose and ends
+			// the turn with end_turn; with no turn used nothing happened.
+			name:          "provider error before any turn is a failure",
+			result:        &acp.PromptResult{StopReason: "end_turn", TurnsUsed: 0},
+			providerError: true,
+			wantOut:       outcomeFailed,
+			wantLimit:     limitNone,
+		},
+		{
+			name:          "provider error after real work keeps the turn's outcome",
+			result:        &acp.PromptResult{StopReason: "end_turn", TurnsUsed: 7},
+			providerError: true,
+			wantOut:       outcomeSucceeded,
+			wantLimit:     limitNone,
+		},
+		{
+			name:           "provider error at the native limit is still limitReached",
+			result:         &acp.PromptResult{StopReason: "end_turn", TurnsUsed: 34},
+			nativeMaxTurns: 34,
+			providerError:  true,
+			wantOut:        outcomeLimitReached,
+			wantLimit:      limitMaxTurns,
+		},
 		{
 			name:      "error is a failure",
 			result:    nil,
@@ -154,7 +179,7 @@ func TestClassifyOutcome(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			gotOut, gotLimit := classifyOutcome(c.result, c.err, c.nativeMaxTurns)
+			gotOut, gotLimit := classifyOutcome(c.result, c.err, c.nativeMaxTurns, c.providerError)
 			if gotOut != c.wantOut || gotLimit != c.wantLimit {
 				t.Errorf("classifyOutcome() = (%v, %v), want (%v, %v)", gotOut, gotLimit, c.wantOut, c.wantLimit)
 			}
@@ -352,5 +377,20 @@ func TestExecuteErrorTerminationBlobUsesGivenExitCode(t *testing.T) {
 	blob := executeErrorTerminationBlob(errors.New("boom"), 2)
 	if blob.ExitCode != 2 {
 		t.Errorf("ExitCode = %d, want 2", blob.ExitCode)
+	}
+}
+
+func TestProviderErrorSummary(t *testing.T) {
+	long := strings.Repeat("x", 250)
+	cases := []struct{ in, want string }{
+		{"Ran into this error: Server error: Failed to call Bedrock: UnrecognizedClientException\n\nPlease retry if you think this is transient.", "Ran into this error: Server error: Failed to call Bedrock: UnrecognizedClientException"},
+		{"\n\n  The provider refused this request.  \n", "The provider refused this request."},
+		{long, strings.Repeat("x", 199) + "…"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := providerErrorSummary(c.in); got != c.want {
+			t.Errorf("providerErrorSummary(%q) = %q, want %q", c.in[:min(len(c.in), 40)], got, c.want)
+		}
 	}
 }
