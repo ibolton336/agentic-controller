@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -240,6 +241,9 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 		logging.Info("always-loaded rules: %s", strings.Join(names, ", "))
 	}
 
+	// Grounding data the first plan rung reports: -1 until the analysis
+	// was actually fetched (skills are what consume it).
+	insightCount := -1
 	if hasSkills {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -253,8 +257,10 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 		// 4b. Write analysis to workspace (if resolved from Hub). Uncommitted:
 		// the entry point never commits files itself; all commits are authored
 		// by the agent.
-		if err := fetchAndWriteAnalysis(hubClient, cfg.AppID, cloneDir); err != nil {
+		if n, err := fetchAndWriteAnalysis(hubClient, cfg.AppID, cloneDir); err != nil {
 			logging.Warn("analysis fetch: %v", err)
+		} else {
+			insightCount = n
 		}
 	}
 
@@ -343,6 +349,10 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 
 	// Harness lifecycle → viewer status frames, in standard ACP
 	// vocabulary. Everything is a no-op without a live tee.
+	prepRung := planPrepRung(creds.RepoURL, creds.Branch, insightCount, red)
+	// turnsSeen is the run's turn count so far across the primary prompt
+	// and the handoff; the task rung re-renders with it on every turn.
+	var turnsSeen atomic.Int64
 	emitPlan := func(prep, agentRun, finish string) {
 		if teeSrv == nil {
 			return
@@ -353,8 +363,8 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 		teeSrv.EmitRunUpdate(map[string]any{
 			"sessionUpdate": "plan",
 			"entries": []map[string]any{
-				entry("Prepare workspace: clone, branch, grounding data", prep),
-				entry("Agent works the stage task", agentRun),
+				entry(prepRung, prep),
+				entry(planTaskRung(cfg, red, int(turnsSeen.Load())), agentRun),
 				entry(fmt.Sprintf("Push results to branch %s", creds.Branch), finish),
 			},
 		})
@@ -402,7 +412,7 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 
 	// 8. Start filesystem watcher BEFORE blocking prompt
 	pushFn := func() error {
-		_, err := emitPush("git push (auto-commit watcher)", func() (bool, error) {
+		_, err := emitPush(fmt.Sprintf("git push to branch %s (auto-commit watcher)", creds.Branch), func() (bool, error) {
 			return git.Push(ctx, creds, repo, creds.Branch, baseSHA)
 		})
 		return err
@@ -425,9 +435,23 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 	if teeSrv != nil {
 		teeSrv.SetRunActive(true)
 	}
+	// Each turn re-emits the ladder so the task rung shows progress
+	// against the budget instead of one spinner for the whole turn. The
+	// handler fires from SendPrompt's own goroutine between
+	// notifications; turnBase carries the primary's count into the
+	// handoff prompt, whose result counts from zero again.
+	turnBase := 0
+	session.SetTurnHandler(func(n int) {
+		turnsSeen.Store(int64(turnBase + n))
+		emitPlan("completed", "in_progress", "pending")
+	})
 	primaryResult, err := session.SendPrompt(ctx, sessionID, []acp.ContentBlock{
 		{Type: "text", Text: stagePrompt},
 	}, cfg.CostLimit)
+	if primaryResult != nil {
+		turnBase = primaryResult.TurnsUsed
+		turnsSeen.Store(int64(turnBase))
+	}
 	if teeSrv != nil {
 		teeSrv.SetRunActive(false)
 	}
@@ -539,7 +563,7 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 	logging.Header("Final Push")
 	pushCtx, pushCancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer pushCancel()
-	pushed, pushErr := emitPush("git push (final)", func() (bool, error) {
+	pushed, pushErr := emitPush(fmt.Sprintf("git push to branch %s (final)", creds.Branch), func() (bool, error) {
 		return git.Push(pushCtx, creds, repo, creds.Branch, baseSHA)
 	})
 	if pushErr != nil {
@@ -726,55 +750,196 @@ func parseHubTokenID(cfg *config.Config) (uint, bool) {
 	return uint(tokenID), true
 }
 
+// workflowStagePosition returns this run's 1-based stage index and the
+// workflow's stage count. ok is false for standalone runs (both values
+// empty) and for metadata that does not describe a position: non-numeric,
+// zero, or an index past the count.
+func workflowStagePosition(cfg *config.Config) (stage, count uint64, ok bool) {
+	if cfg.WorkflowStage == "" || cfg.WorkflowStageCount == "" {
+		return 0, 0, false
+	}
+	stage, err := strconv.ParseUint(cfg.WorkflowStage, 10, 64)
+	if err != nil || stage == 0 {
+		return 0, 0, false
+	}
+	count, err = strconv.ParseUint(cfg.WorkflowStageCount, 10, 64)
+	if err != nil || count == 0 || stage > count {
+		return 0, 0, false
+	}
+	return stage, count, true
+}
+
 // isIntermediateWorkflowStage reports whether the harness is running an
 // intermediate (not last) stage of a multi-stage workflow. Returns false
 // for standalone runs, last stages, and invalid metadata.
 func isIntermediateWorkflowStage(cfg *config.Config) bool {
-	if cfg.WorkflowStage == "" || cfg.WorkflowStageCount == "" {
-		return false
-	}
-	stage, err := strconv.ParseUint(cfg.WorkflowStage, 10, 64)
-	if err != nil || stage == 0 {
-		return false
-	}
-	count, err := strconv.ParseUint(cfg.WorkflowStageCount, 10, 64)
-	if err != nil || count == 0 {
-		return false
-	}
-	return stage < count
+	stage, count, ok := workflowStagePosition(cfg)
+	return ok && stage < count
 }
 
-func fetchAndWriteAnalysis(hubClient *hub.Client, appIDStr string, workDir string) error {
+// planPrepRung is the first rung of the plan ladder: what the workspace
+// holds by the time viewers can attach. insightCount < 0 means the
+// analysis was not fetched (a run without skills has no consumer for it),
+// so the rung says nothing about it rather than claiming zero.
+func planPrepRung(repoURL, branch string, insightCount int, red *redactor) string {
+	var b strings.Builder
+	b.WriteString("Prepare workspace: ")
+	if repo := repoDisplayName(repoURL); repo != "" {
+		b.WriteString(red.redact(repo))
+	} else {
+		b.WriteString("clone")
+	}
+	if branch != "" {
+		fmt.Fprintf(&b, " on branch %s", branch)
+	}
+	switch {
+	case insightCount < 0:
+	case insightCount == 0:
+		b.WriteString(", no analysis insights")
+	case insightCount == 1:
+		b.WriteString(", 1 analysis insight")
+	default:
+		fmt.Fprintf(&b, ", %d analysis insights", insightCount)
+	}
+	return b.String()
+}
+
+// repoDisplayName reduces a clone URL to host and path for a viewer:
+// scheme, embedded credentials and a trailing .git dropped. Empty when
+// the URL is empty or does not parse.
+func repoDisplayName(rawURL string) string {
+	if rawURL == "" {
+		return ""
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	name := u.Host + strings.TrimSuffix(strings.TrimRight(u.Path, "/"), ".git")
+	return name
+}
+
+// taskSummaryMaxLen bounds the task excerpt on the plan rung: one line of
+// the viewer's ladder, not the whole stage prompt.
+const taskSummaryMaxLen = 80
+
+// planTaskRung is the middle rung of the plan ladder the harness shows
+// viewers: which stage this is, what the task asks, and the model and turn
+// budget it runs under. Before this the rung read "Agent works the stage
+// task" for every run, which told a viewer nothing the other two rungs did
+// not. The excerpt is the first line of the stage instructions, rendered
+// with parameter values substituted, so it passes through the redactor
+// like every other text the harness publishes — in full, before the cut.
+//
+// turnsUsed is the run's turn count so far: zero before the prompt is
+// sent ("up to N turns"), then "turn 12 of N" as the ladder is re-emitted
+// per turn. N is the configured budget; the runtime's native ceiling
+// sits at ReserveFraction of it, with the rest kept for the handoff.
+func planTaskRung(cfg *config.Config, red *redactor, turnsUsed int) string {
+	var b strings.Builder
+	// Redact the whole text BEFORE the excerpt is cut: exact-match
+	// redaction cannot recognise a token the cutoff has split, and the
+	// leaked head would sit in the replay ring for every late viewer.
+	// Only the stage instructions are quoted — what a person typed for
+	// this run. The agent prompt opens with a persona ("You are a senior
+	// Java engineer…"), which cut to a line says nothing about the work.
+	excerpt := taskSummary(red.redact(cfg.StageInstructions))
+	stage, count, staged := workflowStagePosition(cfg)
+	switch {
+	case staged && excerpt != "":
+		fmt.Fprintf(&b, "Stage %d of %d — agent works the task: \u201c%s\u201d", stage, count, excerpt)
+	case staged:
+		fmt.Fprintf(&b, "Stage %d of %d — agent works its standing prompt", stage, count)
+	case excerpt != "":
+		fmt.Fprintf(&b, "Agent works the task: \u201c%s\u201d", excerpt)
+	default:
+		b.WriteString("Agent works its standing prompt")
+	}
+	var budget string
+	switch {
+	case turnsUsed > 0 && cfg.MaxTurns > 0:
+		budget = fmt.Sprintf("turn %d of %d", turnsUsed, cfg.MaxTurns)
+	case turnsUsed == 1:
+		budget = "1 turn"
+	case turnsUsed > 1:
+		budget = fmt.Sprintf("%d turns", turnsUsed)
+	case cfg.MaxTurns > 0:
+		budget = fmt.Sprintf("up to %d turns", cfg.MaxTurns)
+	}
+	if cfg.Model != "" || budget != "" {
+		b.WriteString(" (")
+		if cfg.Model != "" {
+			b.WriteString(cfg.Model)
+			if budget != "" {
+				b.WriteString(", ")
+			}
+		}
+		b.WriteString(budget)
+		b.WriteString(")")
+	}
+	return b.String()
+}
+
+// taskSummary returns the first paragraph of text as one line — the
+// lines up to the first blank one, joined with spaces, so hard-wrapped
+// YAML prose is not cut at its first wrap — stripped of leading Markdown
+// heading and list markers and cut to taskSummaryMaxLen runes with an
+// ellipsis. Empty when the text is blank.
+func taskSummary(text string) string {
+	var words []string
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if len(words) == 0 {
+			line = strings.TrimSpace(strings.TrimLeft(line, "#*->"))
+		}
+		if line == "" {
+			if len(words) > 0 {
+				break
+			}
+			continue
+		}
+		words = append(words, strings.Fields(line)...)
+	}
+	summary := strings.Join(words, " ")
+	if r := []rune(summary); len(r) > taskSummaryMaxLen {
+		summary = strings.TrimSpace(string(r[:taskSummaryMaxLen-1])) + "…"
+	}
+	return summary
+}
+
+// fetchAndWriteAnalysis writes the application's analysis insights to
+// .konveyor/analysis.json in the workspace and returns how many there were.
+func fetchAndWriteAnalysis(hubClient *hub.Client, appIDStr string, workDir string) (int, error) {
 	appID, err := hub.ParseAppID(appIDStr)
 	if err != nil {
-		return fmt.Errorf("invalid APP_ID %q: %w", appIDStr, err)
+		return 0, fmt.Errorf("invalid APP_ID %q: %w", appIDStr, err)
 	}
 	insights, err := hubClient.FetchAnalysis(appID)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if len(insights) == 0 {
 		logging.Info("no analysis results for app %s", appIDStr)
-		return nil
+		return 0, nil
 	}
 
 	analysisDir := filepath.Join(workDir, ".konveyor")
 	if err := os.MkdirAll(analysisDir, 0o755); err != nil {
-		return fmt.Errorf("create .konveyor dir: %w", err)
+		return 0, fmt.Errorf("create .konveyor dir: %w", err)
 	}
 
 	data, err := json.MarshalIndent(insights, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal analysis: %w", err)
+		return 0, fmt.Errorf("marshal analysis: %w", err)
 	}
 
 	analysisPath := filepath.Join(analysisDir, "analysis.json")
 	if err := os.WriteFile(analysisPath, data, 0o644); err != nil {
-		return fmt.Errorf("write analysis: %w", err)
+		return 0, fmt.Errorf("write analysis: %w", err)
 	}
 
 	logging.Ok("wrote %d analysis insights to %s", len(insights), analysisPath)
-	return nil
+	return len(insights), nil
 }
 
 // closingMessageLimit bounds what a closing message adds to the pod log.

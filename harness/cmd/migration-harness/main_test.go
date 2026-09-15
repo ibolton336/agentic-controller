@@ -367,7 +367,7 @@ func TestFetchAndWriteAnalysis(t *testing.T) {
 
 	workDir := t.TempDir()
 	hubClient := hub.NewClient(server.URL, "token")
-	err := fetchAndWriteAnalysis(hubClient, "42", workDir)
+	_, err := fetchAndWriteAnalysis(hubClient, "42", workDir)
 	if err != nil {
 		t.Fatalf("fetchAndWriteAnalysis failed: %v", err)
 	}
@@ -379,5 +379,180 @@ func TestFetchAndWriteAnalysis(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "sample insight") {
 		t.Errorf("unexpected content: %s", string(data))
+	}
+}
+
+func TestPlanTaskRung(t *testing.T) {
+	tests := []struct {
+		name  string
+		cfg   config.Config
+		turns int
+		want  string
+	}{
+		{
+			name:  "progress against the budget",
+			cfg:   config.Config{Model: "m", MaxTurns: 40},
+			turns: 12,
+			want:  "Agent works its standing prompt (m, turn 12 of 40)",
+		},
+		{
+			name:  "progress without a budget",
+			cfg:   config.Config{Model: "m"},
+			turns: 12,
+			want:  "Agent works its standing prompt (m, 12 turns)",
+		},
+		{
+			name:  "first turn without a budget",
+			cfg:   config.Config{},
+			turns: 1,
+			want:  "Agent works its standing prompt (1 turn)",
+		},
+		{
+			name: "standalone run with instructions",
+			cfg: config.Config{
+				Model: "claude-sonnet-4-5", MaxTurns: 40,
+				StageInstructions: "Assess the coolstore repository for Quarkus migration.\nList blockers.",
+			},
+			want: `Agent works the task: “Assess the coolstore repository for Quarkus migration. List blockers.” (claude-sonnet-4-5, up to 40 turns)`,
+		},
+		{
+			name: "workflow stage prefix",
+			cfg: config.Config{
+				WorkflowStage: "2", WorkflowStageCount: "3",
+				Model: "gemini-2.5-pro", MaxTurns: 200,
+				StageInstructions: "## Remediate\n\nFix the findings from the assess stage.",
+			},
+			want: `Stage 2 of 3 — agent works the task: “Remediate” (gemini-2.5-pro, up to 200 turns)`,
+		},
+		{
+			name: "no instructions: the agent prompt is not quoted",
+			cfg: config.Config{
+				Model:       "m",
+				AgentPrompt: "\n\n- You are a Java migration agent.",
+			},
+			want: `Agent works its standing prompt (m)`,
+		},
+		{
+			name: "no instructions on a workflow stage",
+			cfg:  config.Config{WorkflowStage: "1", WorkflowStageCount: "2", Model: "m", MaxTurns: 10},
+			want: `Stage 1 of 2 — agent works its standing prompt (m, up to 10 turns)`,
+		},
+		{
+			name: "hard-wrapped paragraph is joined before the cut",
+			cfg: config.Config{
+				Model:             "m",
+				StageInstructions: "Migrate the coolstore services to\nQuarkus, one module at a time,\nand keep the tests green.\n\nSecond paragraph is not quoted.",
+			},
+			want: `Agent works the task: “Migrate the coolstore services to Quarkus, one module at a time, and keep the t…” (m)`,
+		},
+		{
+			name: "long line is cut",
+			cfg: config.Config{
+				StageInstructions: strings.Repeat("word ", 40),
+			},
+			want: `Agent works the task: “` + strings.TrimSpace(strings.Repeat("word ", 40)[:79]) + `…”`,
+		},
+		{
+			name: "no text, no model, no budget",
+			cfg:  config.Config{},
+			want: "Agent works its standing prompt",
+		},
+		{
+			name: "invalid stage metadata is ignored",
+			cfg:  config.Config{WorkflowStage: "5", WorkflowStageCount: "3", Model: "m"},
+			want: "Agent works its standing prompt (m)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := planTaskRung(&tt.cfg, nil, tt.turns); got != tt.want {
+				t.Errorf("planTaskRung() =\n  %q\nwant\n  %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestPlanTaskRungRedactsTokenAcrossCutoff places a known token so the
+// 80-rune excerpt cutoff falls inside it. Redacting after the cut would
+// leave the token's head in the rung (and in the tee's replay ring).
+func TestPlanTaskRungRedactsTokenAcrossCutoff(t *testing.T) {
+	const secret = "ghp_supersecrettoken1234567890"
+	red := &redactor{secrets: []string{secret}}
+	// 60 runes of filler, then the 30-rune token: the cut at 79 lands
+	// nineteen runes into it, while the "[redacted]" marker that replaces
+	// it still fits inside the excerpt.
+	filler := strings.Repeat("x", 60)
+	cfg := &config.Config{StageInstructions: filler + secret + " and more text after it."}
+	got := planTaskRung(cfg, red, 0)
+	if strings.Contains(got, secret[:4]) {
+		t.Fatalf("token head leaked past the excerpt cutoff: %q", got)
+	}
+	if !strings.Contains(got, "[redacted]") {
+		t.Fatalf("expected the redaction marker in %q", got)
+	}
+	// The agent prompt is never quoted, so a token there cannot leak.
+	cfg = &config.Config{AgentPrompt: filler + secret}
+	if got := planTaskRung(cfg, red, 0); strings.Contains(got, secret[:4]) {
+		t.Fatalf("token from the agent prompt reached the rung: %q", got)
+	}
+}
+
+func TestPlanTaskRungRedactsSecrets(t *testing.T) {
+	red := &redactor{secrets: []string{"ghp_supersecrettoken"}}
+	cfg := &config.Config{StageInstructions: "Push using ghp_supersecrettoken to the fork."}
+	got := planTaskRung(cfg, red, 0)
+	if strings.Contains(got, "ghp_supersecrettoken") {
+		t.Fatalf("secret leaked into plan rung: %q", got)
+	}
+	if !strings.Contains(got, "[redacted]") {
+		t.Fatalf("expected redaction marker in %q", got)
+	}
+}
+
+func TestPlanPrepRung(t *testing.T) {
+	tests := []struct {
+		name    string
+		repoURL string
+		branch  string
+		count   int
+		want    string
+	}{
+		{
+			name:    "repo, branch and insights",
+			repoURL: "https://github.com/konveyor/coolstore.git", branch: "migration-1", count: 49,
+			want: "Prepare workspace: github.com/konveyor/coolstore on branch migration-1, 49 analysis insights",
+		},
+		{
+			name:    "embedded credentials are dropped",
+			repoURL: "https://user:ghp_supersecrettoken@github.com/konveyor/coolstore", branch: "b", count: -1,
+			want: "Prepare workspace: github.com/konveyor/coolstore on branch b",
+		},
+		{
+			name:    "zero insights is said, unfetched is not",
+			repoURL: "https://github.com/k/r", branch: "b", count: 0,
+			want: "Prepare workspace: github.com/k/r on branch b, no analysis insights",
+		},
+		{
+			name:    "single insight",
+			repoURL: "https://github.com/k/r", branch: "b", count: 1,
+			want: "Prepare workspace: github.com/k/r on branch b, 1 analysis insight",
+		},
+		{
+			name:    "unparseable url falls back to clone",
+			repoURL: "::not a url", branch: "b", count: -1,
+			want: "Prepare workspace: clone on branch b",
+		},
+		{
+			name:  "nothing known",
+			count: -1,
+			want:  "Prepare workspace: clone",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := planPrepRung(tt.repoURL, tt.branch, tt.count, nil); got != tt.want {
+				t.Errorf("planPrepRung() =\n  %q\nwant\n  %q", got, tt.want)
+			}
+		})
 	}
 }

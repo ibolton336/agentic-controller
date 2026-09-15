@@ -167,6 +167,11 @@ type Server struct {
 	runSessionID string
 	runActive    atomic.Bool
 
+	// replayKeys parallels replay: a non-empty key marks a frame that
+	// supersedes any earlier frame with the same key (the plan ladder,
+	// re-emitted as the turn progresses, would otherwise fill the ring
+	// and evict the push and outcome frames a late viewer needs).
+	replayKeys []string
 	// replay holds the harness's own emitted status frames for viewers
 	// that attach later. Guarded by mu.
 	replay [][]byte
@@ -324,7 +329,19 @@ func (s *Server) SetRunActive(active bool) {
 // prep, watcher/final git pushes, stage outcome. The frame also enters
 // the replay ring so late viewers catch up.
 func (s *Server) EmitRunUpdate(update any) {
-	s.emitRunFrame("session/update", update)
+	s.emitRunFrame("session/update", update, replayKeyFor(update))
+}
+
+// replayKeyFor returns the replay-ring key for a harness update: "plan"
+// for a plan ladder (each carries the whole ladder, so only the latest
+// is worth replaying), empty for everything else.
+func replayKeyFor(update any) string {
+	if m, ok := update.(map[string]any); ok {
+		if kind, _ := m["sessionUpdate"].(string); kind == "plan" {
+			return kind
+		}
+	}
+	return ""
 }
 
 // EmitRunNotice broadcasts a stage-level status line using goose's own
@@ -334,10 +351,10 @@ func (s *Server) EmitRunNotice(message string) {
 	s.emitRunFrame(gooseUpdateMethod, map[string]any{
 		"sessionUpdate": "status_message",
 		"status":        map[string]any{"type": "notice", "message": message},
-	})
+	}, "")
 }
 
-func (s *Server) emitRunFrame(method string, update any) {
+func (s *Server) emitRunFrame(method string, update any, replayKey string) {
 	_, sessionID := s.run()
 	if sessionID == "" {
 		return
@@ -353,9 +370,20 @@ func (s *Server) emitRunFrame(method string, update any) {
 	}
 
 	s.mu.Lock()
+	if replayKey != "" {
+		for i, k := range s.replayKeys {
+			if k == replayKey {
+				s.replay = append(s.replay[:i], s.replay[i+1:]...)
+				s.replayKeys = append(s.replayKeys[:i], s.replayKeys[i+1:]...)
+				break
+			}
+		}
+	}
 	s.replay = append(s.replay, frame)
+	s.replayKeys = append(s.replayKeys, replayKey)
 	if len(s.replay) > replayCap {
 		s.replay = s.replay[len(s.replay)-replayCap:]
+		s.replayKeys = s.replayKeys[len(s.replayKeys)-replayCap:]
 	}
 	s.mu.Unlock()
 

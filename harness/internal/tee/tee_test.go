@@ -1085,3 +1085,47 @@ func isResolution(frame, id string) bool {
 	}
 	return f.Method == "" && f.ID == id && len(f.Result) > 0
 }
+
+// TestReplayKeepsOnlyLatestPlan proves a re-emitted plan ladder replaces
+// the earlier one in the replay ring instead of stacking up, while
+// unkeyed frames (pushes, notices) accumulate as before.
+func TestReplayKeepsOnlyLatestPlan(t *testing.T) {
+	s := New(Config{SecretKey: "k"})
+	s.runMu.Lock()
+	s.runSessionID = "run-1"
+	s.runMu.Unlock()
+
+	plan := func(status string) map[string]any {
+		return map[string]any{
+			"sessionUpdate": "plan",
+			"entries":       []map[string]any{{"content": "x", "status": status}},
+		}
+	}
+	s.EmitRunUpdate(plan("pending"))
+	s.EmitRunUpdate(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "p1", "title": "git push"})
+	s.EmitRunUpdate(plan("in_progress"))
+	s.EmitRunNotice("stage succeeded")
+	s.EmitRunUpdate(plan("completed"))
+
+	s.mu.Lock()
+	replay := append([][]byte(nil), s.replay...)
+	s.mu.Unlock()
+	if len(replay) != 3 {
+		t.Fatalf("replay holds %d frames, want 3 (tool_call, notice, latest plan)", len(replay))
+	}
+	plans := 0
+	for _, f := range replay {
+		if strings.Contains(string(f), `"sessionUpdate":"plan"`) {
+			plans++
+			if !strings.Contains(string(f), `"status":"completed"`) {
+				t.Errorf("replayed plan is not the latest: %s", f)
+			}
+		}
+	}
+	if plans != 1 {
+		t.Errorf("replay holds %d plan frames, want 1", plans)
+	}
+	if !strings.Contains(string(replay[len(replay)-1]), `"sessionUpdate":"plan"`) {
+		t.Errorf("latest plan should sit at the tail of the replay, got %s", replay[len(replay)-1])
+	}
+}
