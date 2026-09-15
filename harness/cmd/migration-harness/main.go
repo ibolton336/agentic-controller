@@ -526,8 +526,8 @@ func runStage(cmd *cobra.Command, args []string) (code int, err error) {
 		}
 		if providerRejected {
 			// "end_turn" is what goose said; the provider's message is
-			// what happened. The controller surfaces this as the run's
-			// failure message (#231).
+			// what happened, and stopReason is the blob's free-text field
+			// for it (#231).
 			term.StopReason = "provider error: " + providerSummary
 		}
 	} else {

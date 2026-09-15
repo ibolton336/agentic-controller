@@ -2,6 +2,5 @@ kind: bugfix
 description: >
   A run whose only model call the provider rejected (a dead credential, an
   invalid model id) now fails instead of reporting Succeeded, with the
-  provider's message as the run's failure reason and in the viewer notice;
-  the controller shows the harness termination log's stopReason on the
-  Succeeded=False condition instead of the raw JSON blob.
+  provider's error line, not narration streamed before it, as the
+  termination log's stopReason and in the viewer notice.

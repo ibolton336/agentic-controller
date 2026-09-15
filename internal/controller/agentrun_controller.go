@@ -1755,33 +1755,11 @@ func (r *AgentRunReconciler) setTerminalOutcome(
 			message = fmt.Sprintf("Agent exited with code %d", exitCode)
 		}
 		// Prefer the harness's human-readable failure message when present.
-		if fm := humanFailureMessage(failureMessage); fm != "" {
-			message = fm
+		if failureMessage != "" {
+			message = failureMessage
 		}
 		setRunSucceeded(run, metav1.ConditionFalse, konveyoriov1alpha1.AgentRunReasonFailed, message)
 	}
-}
-
-// humanFailureMessage extracts the sentence worth showing a person from
-// the agent container's termination message. The harness writes its
-// termination log as the ADR 0011 JSON blob, whose free-text field is
-// stopReason (e.g. "provider error: Ran into this error: … security token
-// … is invalid", #231); pasting the whole blob into the condition message
-// put JSON in the console. A blob with no stopReason yields "" so the
-// generic exit-code message stands; anything that is not the blob is
-// returned as-is (the plain-text path of #143).
-func humanFailureMessage(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if !strings.HasPrefix(raw, "{") {
-		return raw
-	}
-	var blob struct {
-		StopReason string `json:"stopReason"`
-	}
-	if err := json.Unmarshal([]byte(raw), &blob); err != nil {
-		return raw
-	}
-	return strings.TrimSpace(blob.StopReason)
 }
 
 // setRunSucceeded sets the AgentRun's Succeeded condition — the single
