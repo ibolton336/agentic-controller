@@ -381,11 +381,21 @@ func TestExecuteErrorTerminationBlobUsesGivenExitCode(t *testing.T) {
 }
 
 func TestProviderErrorSummary(t *testing.T) {
-	long := strings.Repeat("x", 250)
+	long := strings.Repeat("x", providerErrorSummaryLen+50)
+	retry := "\n\nPlease retry if you think this is a transient or recoverable error."
+	// The shape of #231's line (request ids zeroed): goose renders the AWS
+	// SDK error with Debug formatting, which puts the reason past rune 160.
+	bedrock := `Ran into this error: Server error: Failed to call Bedrock: Unhandled(Unhandled { source: ErrorMetadata { code: Some("UnrecognizedClientException"), message: Some("The security token included in the request is invalid."), extras: Some({"aws_request_id": "00000000-0000-0000-0000-000000000000"}) }, meta: ErrorMetadata { code: Some("UnrecognizedClientException"), message: Some("The security token included in the request is invalid."), extras: Some({"aws_request_id": "00000000-0000-0000-0000-000000000000"}) } }).`
 	cases := []struct{ in, want string }{
 		{"Ran into this error: Server error: Failed to call Bedrock: UnrecognizedClientException\n\nPlease retry if you think this is transient.", "Ran into this error: Server error: Failed to call Bedrock: UnrecognizedClientException"},
+		{bedrock + retry, bedrock},
+		// Narration streamed ahead of the failure, in the same message or an
+		// earlier one (FinalMessage joins them), is not the error.
+		{"Here is the plan:\n1. Update pom.xml\nRan into this error: ThrottlingException." + retry, "Ran into this error: ThrottlingException."},
+		{"Done with the first file.\nRan into this error: 503." + retry, "Ran into this error: 503."},
+		{"Here is the plan:\nConnection reset by peer\n\nPlease resend your message to try again.", "Connection reset by peer"},
 		{"\n\n  The provider refused this request.  \n", "The provider refused this request."},
-		{long, strings.Repeat("x", 199) + "…"},
+		{long, strings.Repeat("x", providerErrorSummaryLen-1) + "…"},
 		{"", ""},
 	}
 	for _, c := range cases {

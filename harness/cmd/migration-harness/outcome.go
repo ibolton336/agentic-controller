@@ -175,9 +175,14 @@ func combineUsage(primary, handoff *acp.PromptResult) usage {
 }
 
 // providerErrorSummary reduces goose's provider-error prose to the one
-// line worth showing a person: the first non-empty line, cut to
-// providerErrorSummaryLen runes. text must already be redacted.
+// line worth showing a person: the first non-empty line of the failure
+// itself (acp.ProviderErrorText), not of narration the agent streamed
+// before it, cut to providerErrorSummaryLen runes. text must already be
+// redacted.
 func providerErrorSummary(text string) string {
+	if failure := acp.ProviderErrorText(text); failure != "" {
+		text = failure
+	}
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -191,10 +196,13 @@ func providerErrorSummary(text string) string {
 	return ""
 }
 
-// providerErrorSummaryLen keeps the summary inside the termination log's
-// 200-rune stopReason trim, so the controller shows the same text the
-// notice carried.
-const providerErrorSummaryLen = 200
+// providerErrorSummaryLen bounds the summary without cutting away the
+// reason: goose renders an AWS SDK error with Debug formatting, and #231's
+// Bedrock line ran ~500 runes with "The security token included in the
+// request is invalid." past rune 160. At this length the termination log
+// still sits well under the kubelet's 4096 bytes; writeTerminationLog's
+// overflow trim remains the backstop.
+const providerErrorSummaryLen = 1000
 
 // terminationBlob is the compact JSON written to /dev/termination-log
 // (ADR 0011). Kept small: the kubelet truncates termination messages
