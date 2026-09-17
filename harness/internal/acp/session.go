@@ -111,9 +111,19 @@ func (c *SessionClient) permissionForwarder() PermissionForwarder {
 	return c.forwarder
 }
 
+// acpProtocolVersion is the ACP protocol version this client offers in
+// initialize. It is a u16 on the wire, not a string: goose parses the
+// field as an integer and rejects anything else with
+// `-32602 Invalid params: invalid type: string "0.1", expected u16`.
+// Older goose (1.45, what agent-java:latest carries today) coerced the
+// string quietly and negotiated the session down to ACP v0 instead, so
+// the bug was invisible until a newer goose refused the handshake.
+// Version 1 is accepted by both.
+const acpProtocolVersion = 1
+
 // InitParams are required for the ACP initialize handshake.
 type InitParams struct {
-	ProtocolVersion string     `json:"protocolVersion"`
+	ProtocolVersion int        `json:"protocolVersion"`
 	ClientInfo      ClientInfo `json:"clientInfo"`
 	// ClientCapabilities is the ACP field name (the earlier "capabilities"
 	// spelling was never read by goose). The goose extension point lives
@@ -142,14 +152,15 @@ type InitResult struct {
 
 // Initialize performs the required ACP handshake. Must be called before
 // any session operations. protocolVersion is required — goose returns a
-// parse error without it.
+// parse error without it, and it must be a number (see
+// acpProtocolVersion).
 func (c *SessionClient) Initialize(ctx context.Context) (*InitResult, error) {
 	if c.initialized {
 		return nil, nil
 	}
 
 	result, _, err := c.ws.Call(ctx, "initialize", &InitParams{
-		ProtocolVersion: "0.1",
+		ProtocolVersion: acpProtocolVersion,
 		ClientInfo: ClientInfo{
 			Name:    "migration-harness",
 			Version: "0.1.0",

@@ -1,0 +1,8 @@
+kind: bugfix
+description: >
+  Send the ACP initialize protocolVersion as the number 1 instead of the
+  string "0.1". goose parses the field as an integer: the string was
+  quietly coerced by goose 1.45 (the version agent-java:latest carries),
+  which negotiated the session down to ACP v0, and any newer goose
+  rejects the handshake with "invalid type: string, expected u16" so no
+  run can start.

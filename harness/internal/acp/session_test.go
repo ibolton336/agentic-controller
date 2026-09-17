@@ -300,6 +300,47 @@ func TestInitializeDeclaresGooseCustomNotifications(t *testing.T) {
 	}
 }
 
+// The ACP initialize param protocolVersion is a u16 on the wire. Sending
+// it as the string "0.1" got coerced by goose 1.45 (which then negotiated
+// the session down to ACP v0), but a newer goose rejects the handshake
+// outright with `-32602 Invalid params: invalid type: string "0.1",
+// expected u16`. Pin the JSON type so that cannot come back.
+func TestInitializeSendsNumericProtocolVersion(t *testing.T) {
+	s := newDemuxServer(t)
+	c := s.dial(t)
+	sc := NewSessionClient(c)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := sc.Initialize(ctx)
+		done <- err
+	}()
+
+	req := s.next()
+	params, _ := req["params"].(map[string]any)
+	got, ok := params["protocolVersion"].(float64)
+	if !ok {
+		t.Fatalf("protocolVersion must be a JSON number, got %#v: %v", params["protocolVersion"], params)
+	}
+	if int(got) != acpProtocolVersion {
+		t.Fatalf("protocolVersion = %v, want %d", got, acpProtocolVersion)
+	}
+
+	rawID, ok := req["id"].(float64)
+	if !ok {
+		t.Fatalf("initialize request carried no numeric id: %v", req)
+	}
+	s.push(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"protocolVersion":%d,"agentCapabilities":{}}}`,
+		int64(rawID), acpProtocolVersion))
+
+	if err := <-done; err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+}
+
 type stubForwarder struct {
 	result  json.RawMessage
 	outcome PermissionForwardOutcome
