@@ -1,0 +1,12 @@
+kind: breaking
+
+description: >
+  The agent's ask_user tool is now opt-in. It shipped default-on (#161), so
+  any run could be failed by a question nobody was attached to answer — the
+  gate is fail-closed by design, and whether the model asks is its own call.
+  A run now gets the tool only when it asks for it: spec.execution.askUser
+  on an AgentRun or an AgentWorkflow stage (next to mode; delivered to the
+  harness as execution.askUser in params.json), or HARNESS_HITL_ASK=on for a
+  harness run outside the controller. HARNESS_HITL_ASK=off still wins over
+  both. Runs that relied on the old default must set askUser: true; nothing
+  else about ask_user changes — an unanswered question still fails the run.
