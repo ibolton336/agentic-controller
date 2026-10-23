@@ -1,0 +1,328 @@
+<title>Agentic Controller Architecture</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* Layout: a single reading column of prose with three full-width figures; each figure scrolls sideways on narrow screens instead of shrinking below legibility. */
+  :root {
+    --bg: #f5f7f4;
+    --fg: #1c2320;
+    --muted: #5a665f;
+    --line: #7f8a83;
+    --panel: #ffffff;
+    --panel-2: #e9ede7;
+    --accent: #1b6f63;
+    --accent-soft: #d8ebe6;
+    --font-body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+    --font-mono: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141a17; --fg: #e4e8e2; --muted: #9aa69e; --line: #6c776f;
+      --panel: #1e2622; --panel-2: #252e29; --accent: #5cc7b2; --accent-soft: #1f3a35;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141a17; --fg: #e4e8e2; --muted: #9aa69e; --line: #6c776f;
+    --panel: #1e2622; --panel-2: #252e29; --accent: #5cc7b2; --accent-soft: #1f3a35;
+    color-scheme: dark;
+  }
+  body {
+    background: var(--bg); color: var(--fg);
+    font-family: var(--font-body); font-size: 15px; line-height: 1.55;
+    padding-block: 32px 64px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  main { max-width: 1120px; margin: 0 auto; display: grid; gap: 40px; }
+  header { max-width: 68ch; display: grid; gap: 10px; }
+  .eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  h1 { font-size: 28px; font-weight: 600; line-height: 1.2; margin: 0; text-wrap: balance; }
+  h2 { font-size: 20px; font-weight: 600; margin: 0; text-wrap: balance; }
+  p { margin: 0; max-width: 68ch; }
+  code { font-family: var(--font-mono); font-size: .92em; background: var(--panel-2); padding: 1px 5px; border-radius: 3px; }
+  section { display: grid; gap: 14px; }
+  figure { margin: 0; display: grid; gap: 10px; }
+  .scroll { overflow-x: auto; border: 1px solid var(--line); background: var(--panel-2); border-radius: 6px; padding: 12px; }
+  .scroll svg { display: block; height: auto; }
+  figcaption { font-size: 14px; color: var(--muted); max-width: 72ch; }
+  svg text { font-family: var(--font-body); font-size: 12.5px; fill: currentColor; }
+  svg text.t { font-weight: 600; font-size: 13.5px; }
+  svg text.m { font-family: var(--font-mono); font-size: 10.5px; }
+  svg text.s { font-size: 11.5px; fill: var(--muted); }
+  svg text.k { font-family: var(--font-mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; fill: var(--muted); }
+  svg text.a { fill: var(--accent); }
+  svg .box { fill: var(--panel); stroke: currentColor; stroke-width: 1.2; }
+  svg .group { fill: var(--panel-2); stroke: var(--line); stroke-width: 1; stroke-dasharray: 4 3; }
+  svg .box.accent { stroke: var(--accent); stroke-width: 2; }
+  svg .box.ghost { stroke-dasharray: 5 4; stroke: var(--line); }
+  svg .edge { fill: none; stroke: currentColor; stroke-width: 1.3; }
+  svg .edge.dashed { stroke-dasharray: 5 4; }
+  svg .edge.accent { stroke: var(--accent); stroke-width: 1.8; }
+  svg .strike { stroke: var(--line); stroke-width: 1.5; }
+  ul { margin: 0; padding-left: 20px; max-width: 72ch; display: grid; gap: 6px; }
+  .legend { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+</style>
+
+<main>
+  <header>
+    <div class="eyebrow">konveyor/agentic-controller · as of PR 280</div>
+    <h1>How a run flows through the platform, and what ADR 0021 changes</h1>
+    <p>Three figures. The first is the system as it ships today, from ADR 0016 and the CONTEXT.md glossary. The second is the direction PR 280 records in ADR 0021. The third is the OpenShell correction the same PR makes. Nothing in the PR changes code; figures two and three describe decisions and corrected assumptions.</p>
+  </header>
+
+  <section>
+    <h2>1. Today: Gateway CRD and direct Agent Sandbox</h2>
+    <figure>
+      <div class="scroll">
+        <svg viewBox="0 0 1360 620" width="1360" role="img" aria-label="The UI calls Hub, Hub creates CRs in the Kubernetes API, the controller watches them and creates a Sandbox CR, the Agent Sandbox controller runs a pod containing the harness and the agent runtime. The harness talks to Hub and the git remote; the runtime calls the LLM provider with a real key; the UI streams ACP from the pod directly.">
+          <defs>
+            <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+          </defs>
+
+          <!-- control plane row -->
+          <rect class="box" x="20" y="50" width="130" height="80" rx="4"/>
+          <text class="t" x="85" y="86" text-anchor="middle">tackle2-ui</text>
+          <text class="s" x="85" y="106" text-anchor="middle">web UI</text>
+
+          <rect class="box" x="210" y="50" width="140" height="80" rx="4"/>
+          <text class="t" x="280" y="84" text-anchor="middle">Hub</text>
+          <text class="m" x="280" y="106" text-anchor="middle">/hub/agent/ REST</text>
+
+          <rect class="box" x="420" y="30" width="200" height="130" rx="4"/>
+          <text class="t" x="520" y="56" text-anchor="middle">Kubernetes API</text>
+          <text class="m" x="520" y="82" text-anchor="middle">Gateway + credential Secret</text>
+          <text class="m" x="520" y="100" text-anchor="middle">Agent · AgentRun</text>
+          <text class="m" x="520" y="118" text-anchor="middle">SkillCard · SkillCollection</text>
+          <text class="m" x="520" y="136" text-anchor="middle">AgentWorkflow(Run)</text>
+
+          <rect class="box" x="680" y="50" width="190" height="80" rx="4"/>
+          <text class="t" x="775" y="84" text-anchor="middle">agentic-controller</text>
+          <text class="s" x="775" y="106" text-anchor="middle">stateless reconciler</text>
+
+          <rect class="box" x="940" y="50" width="160" height="80" rx="4"/>
+          <text class="t" x="1020" y="84" text-anchor="middle">verification Job</text>
+          <text class="s" x="1020" y="106" text-anchor="middle">probes the Gateway</text>
+
+          <rect class="box" x="1190" y="50" width="150" height="80" rx="4"/>
+          <text class="t" x="1265" y="84" text-anchor="middle">LLM provider</text>
+          <text class="s" x="1265" y="106" text-anchor="middle">anthropic, openai, …</text>
+
+          <!-- row edges -->
+          <line class="edge" x1="150" y1="90" x2="210" y2="90" marker-end="url(#a1)"/>
+          <text class="m" x="180" y="80" text-anchor="middle">REST</text>
+
+          <line class="edge" x1="350" y1="90" x2="420" y2="90" marker-end="url(#a1)"/>
+          <text class="m" x="385" y="80" text-anchor="middle">creates CR</text>
+          <text class="m" x="385" y="106" text-anchor="middle">HUB_* env</text>
+
+          <line class="edge" x1="620" y1="90" x2="680" y2="90" marker-start="url(#a1)" marker-end="url(#a1)"/>
+          <text class="m" x="650" y="80" text-anchor="middle">watches</text>
+          <text class="m" x="650" y="106" text-anchor="middle">status</text>
+
+          <line class="edge" x1="870" y1="90" x2="940" y2="90" marker-end="url(#a1)"/>
+          <text class="m" x="905" y="80" text-anchor="middle">on Gateway</text>
+          <text class="m" x="905" y="106" text-anchor="middle">change</text>
+
+          <line class="edge" x1="1100" y1="90" x2="1190" y2="90" marker-end="url(#a1)"/>
+          <text class="m" x="1145" y="80" text-anchor="middle">GET</text>
+          <text class="m" x="1145" y="106" text-anchor="middle">/v1/models</text>
+
+          <!-- controller -> Agent Sandbox -> pod -->
+          <line class="edge" x1="775" y1="130" x2="775" y2="200" marker-end="url(#a1)"/>
+          <text class="m" x="787" y="160" text-anchor="start">creates Sandbox CR</text>
+          <text class="m" x="787" y="176" text-anchor="start">params.json + KONVEYOR_LLM_* env</text>
+
+          <rect class="box" x="680" y="200" width="190" height="60" rx="4"/>
+          <text class="t" x="775" y="226" text-anchor="middle">Agent Sandbox</text>
+          <text class="s" x="775" y="246" text-anchor="middle">controller (kubernetes-sigs)</text>
+
+          <line class="edge" x1="775" y1="260" x2="775" y2="300" marker-end="url(#a1)"/>
+          <text class="m" x="787" y="284" text-anchor="start">runs the Pod</text>
+
+          <!-- pod -->
+          <rect class="group" x="420" y="300" width="700" height="300" rx="6"/>
+          <text class="k" x="440" y="326" text-anchor="start">Sandbox Pod · single container</text>
+
+          <rect class="box" x="440" y="340" width="660" height="105" rx="4"/>
+          <text class="t" x="460" y="364" text-anchor="start">Agent runtime</text>
+          <text class="s" x="580" y="364" text-anchor="start">Goose today</text>
+          <text x="460" y="388" text-anchor="start">ACP on loopback :4001</text>
+          <text x="460" y="406" text-anchor="start">commits locally; never holds push credentials</text>
+          <text x="460" y="424" text-anchor="start">reads KONVEYOR_LLM_ENDPOINT / MODEL / PROVIDER and the real API key from env</text>
+
+          <line class="edge" x1="755" y1="480" x2="755" y2="445" marker-end="url(#a1)"/>
+          <text class="m" x="765" y="467" text-anchor="start">launches; tees ACP</text>
+
+          <rect class="box" x="440" y="480" width="660" height="105" rx="4"/>
+          <text class="t" x="460" y="504" text-anchor="start">Harness</text>
+          <text class="s" x="535" y="504" text-anchor="start">Go entrypoint in the base image</text>
+          <text x="460" y="528" text-anchor="start">reads /run/konveyor/params.json</text>
+          <text x="460" y="546" text-anchor="start">clones the repo; keeps git push credentials to itself</text>
+          <text x="460" y="564" text-anchor="start">owns the pod ACP port :4000 (tee); revokes HUB_TOKEN on exit</text>
+
+          <!-- git remote -->
+          <rect class="box" x="1190" y="480" width="150" height="70" rx="4"/>
+          <text class="t" x="1265" y="510" text-anchor="middle">Git remote</text>
+          <text class="s" x="1265" y="530" text-anchor="middle">target branch</text>
+          <line class="edge" x1="1100" y1="515" x2="1190" y2="515" marker-end="url(#a1)"/>
+          <text class="m" x="1145" y="505" text-anchor="middle">clone / push</text>
+
+          <!-- runtime -> LLM provider -->
+          <polyline class="edge" points="1100,392 1265,392 1265,130" marker-end="url(#a1)"/>
+          <text class="m" x="1182" y="382" text-anchor="middle">native provider call</text>
+          <text class="m" x="1182" y="406" text-anchor="middle">real API key</text>
+
+          <!-- harness -> Hub -->
+          <polyline class="edge" points="440,540 280,540 280,130" marker-end="url(#a1)"/>
+          <text class="m" x="290" y="330" text-anchor="start">resolves app,</text>
+          <text class="m" x="290" y="346" text-anchor="start">git creds via</text>
+          <text class="m" x="290" y="362" text-anchor="start">HUB_TOKEN</text>
+
+          <!-- UI -> harness ACP -->
+          <polyline class="edge" points="85,130 85,580 440,580" marker-end="url(#a1)"/>
+          <text class="m" x="262" y="570" text-anchor="middle">ACP stream :4000, direct to the pod</text>
+        </svg>
+      </div>
+      <figcaption>Shipped today (ADR 0016). The controller never talks to the pod. Hub is both the front door for CRs and the data service the harness calls at runtime. The agent process can read the real LLM key, which ADR 0016 accepts as a dev-preview limitation. Only the harness can push.</figcaption>
+    </figure>
+    <ul>
+      <li><strong>Gateway</strong> is a Konveyor CRD: one provider, one endpoint, one credential Secret, one model. An AgentRun picks a model by naming a Gateway, so the controller never interprets a model name.</li>
+      <li><strong>Hub</strong> mints a scoped token at AgentRun create time and injects <code>HUB_BASE_URL</code>, <code>APP_ID</code> and the token into the CR. It does not launch or manage workloads.</li>
+      <li><strong>The harness</strong> is the only process with push authority. The agent commits on a local checkout the harness prepared.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>2. ADR 0021: swap the runtime, keep the harness, choose the backend later</h2>
+    <figure>
+      <div class="scroll">
+        <svg viewBox="0 0 1000 400" width="1000" role="img" aria-label="The unchanged controller can drive three execution backends through one workload and outcome contract: direct Agent Sandbox (default), the Lightspeed operator (conditional), and OpenShell (deferred). The workload keeps the existing harness and replaces Goose with the shared DeepAgents runtime.">
+          <defs>
+            <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+          </defs>
+
+          <rect class="box" x="20" y="160" width="190" height="80" rx="4"/>
+          <text class="t" x="115" y="194" text-anchor="middle">agentic-controller</text>
+          <text class="s" x="115" y="216" text-anchor="middle">unchanged, domain-agnostic</text>
+          <text class="m" x="115" y="266" text-anchor="middle">one workload and</text>
+          <text class="m" x="115" y="282" text-anchor="middle">outcome contract</text>
+          <text class="m" x="115" y="298" text-anchor="middle">for every backend</text>
+
+          <line class="edge accent" x1="210" y1="200" x2="300" y2="70" marker-end="url(#a2)"/>
+          <line class="edge dashed" x1="210" y1="200" x2="300" y2="200" marker-end="url(#a2)"/>
+          <line class="edge dashed" x1="210" y1="200" x2="300" y2="330" marker-end="url(#a2)"/>
+
+          <rect class="box accent" x="300" y="30" width="240" height="80" rx="4"/>
+          <text class="t a" x="320" y="56" text-anchor="start">Direct Agent Sandbox</text>
+          <text x="320" y="76" text-anchor="start">default today</text>
+          <text x="320" y="94" text-anchor="start">the MTA 8.4 release path</text>
+
+          <rect class="box ghost" x="300" y="160" width="240" height="80" rx="4"/>
+          <text class="t" x="320" y="186" text-anchor="start">Lightspeed operator</text>
+          <text x="320" y="206" text-anchor="start">needs upstream per-invocation</text>
+          <text x="320" y="224" text-anchor="start">image selection; no patched fork</text>
+
+          <rect class="box ghost" x="300" y="290" width="240" height="80" rx="4"/>
+          <text class="t" x="320" y="316" text-anchor="start">OpenShell</text>
+          <text x="320" y="336" text-anchor="start">deferred; separate investigation</text>
+          <text x="320" y="354" text-anchor="start">(see figure 3)</text>
+
+          <line class="edge accent" x1="540" y1="70" x2="630" y2="70" marker-end="url(#a2)"/>
+          <text class="m" x="585" y="60" text-anchor="middle">runs</text>
+          <line class="edge dashed" x1="540" y1="200" x2="630" y2="200" marker-end="url(#a2)"/>
+          <text class="m" x="585" y="190" text-anchor="middle">runs</text>
+          <text class="m" x="585" y="214" text-anchor="middle">+ k8s Result</text>
+          <line class="edge dashed" x1="540" y1="330" x2="630" y2="330" marker-end="url(#a2)"/>
+          <text class="m" x="585" y="320" text-anchor="middle">runs</text>
+
+          <rect class="group" x="630" y="30" width="350" height="340" rx="6"/>
+          <text class="k" x="650" y="56" text-anchor="start">Workload · any backend</text>
+
+          <rect class="box" x="650" y="75" width="310" height="120" rx="4"/>
+          <text class="t" x="665" y="99" text-anchor="start">Harness</text>
+          <text class="s" x="735" y="99" text-anchor="start">unchanged</text>
+          <text x="665" y="122" text-anchor="start">Hub application and repo resolution</text>
+          <text x="665" y="140" text-anchor="start">workspace and instruction preparation</text>
+          <text x="665" y="158" text-anchor="start">harness-owned git push, token cleanup</text>
+          <text x="665" y="176" text-anchor="start">final outcome report</text>
+
+          <rect class="box accent" x="650" y="215" width="310" height="135" rx="4"/>
+          <text class="t a" x="665" y="239" text-anchor="start">Shared DeepAgents runtime</text>
+          <text class="s" x="665" y="258" text-anchor="start">from Lightspeed; replaces Goose</text>
+          <text x="665" y="281" text-anchor="start">model, tool, skill and MCP execution</text>
+          <text x="665" y="299" text-anchor="start">through a supported interface, not the</text>
+          <text x="665" y="317" text-anchor="start">prototype's extraction of internal graph code</text>
+          <text x="665" y="335" text-anchor="start">retained sessions tracked as separate work</text>
+
+          <text class="m" x="20" y="392" text-anchor="start">dashed: a portability target, not qualified; teal: what ADR 0021 selects for 8.4</text>
+        </svg>
+      </div>
+      <figcaption>The two choices are independent. Runtime reuse can ship on the existing controller and direct Agent Sandbox. Operator adoption waits on upstream per-invocation image selection and an agreed workload contract. A backend-specific step failing after the push succeeded must surface as an integration failure, never as a silent full success.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2>3. The OpenShell correction: what ADR 0004 assumed versus v0.1.3</h2>
+    <figure>
+      <div class="scroll">
+        <svg viewBox="0 0 1080 300" width="1080" role="img" aria-label="Left: ADR 0004 assumed the workload called inference.local, a privacy router picked the model and swapped the credential, so one OpenShell gateway meant one model and Konveyor's Gateway CRD would go away. Right: in OpenShell v0.1.3 the workload calls the native provider API with a placeholder key, a sandbox proxy checks policy and substitutes the real key, the workload selects the model, and Konveyor's Gateway stays.">
+          <defs>
+            <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+          </defs>
+
+          <!-- left panel: assumed -->
+          <text class="k" x="15" y="26" text-anchor="start">ADR 0004 assumed (July 2026)</text>
+          <rect class="box" x="15" y="60" width="100" height="60" rx="4"/>
+          <text class="t" x="65" y="95" text-anchor="middle">workload</text>
+          <line class="edge" x1="115" y1="90" x2="147" y2="90" marker-end="url(#a3)"/>
+          <rect class="box ghost" x="147" y="60" width="100" height="60" rx="4"/>
+          <text class="m" x="197" y="95" text-anchor="middle">inference.local</text>
+          <line class="strike" x1="152" y1="115" x2="242" y2="65"/>
+          <line class="edge" x1="247" y1="90" x2="279" y2="90" marker-end="url(#a3)"/>
+          <rect class="box ghost" x="279" y="60" width="100" height="60" rx="4"/>
+          <text x="329" y="87" text-anchor="middle">privacy</text>
+          <text x="329" y="103" text-anchor="middle">router</text>
+          <line class="strike" x1="284" y1="115" x2="374" y2="65"/>
+          <line class="edge" x1="379" y1="90" x2="411" y2="90" marker-end="url(#a3)"/>
+          <rect class="box" x="411" y="60" width="100" height="60" rx="4"/>
+          <text class="t" x="461" y="95" text-anchor="middle">provider</text>
+
+          <text x="15" y="160" text-anchor="start">One OpenShell gateway serves one provider and one model.</text>
+          <text x="15" y="182" text-anchor="start">The router picks the model and swaps in the real credential.</text>
+          <text x="15" y="204" text-anchor="start">Provider-specific config disappears; Konveyor's Gateway CRD is removed.</text>
+          <text class="s" x="15" y="240" text-anchor="start">Struck boxes were removed upstream in NVIDIA/OpenShell#3195, Sept 2026.</text>
+          <text class="s" x="15" y="258" text-anchor="start">PR 271 read that as "credential isolation is gone". It was not.</text>
+
+          <line class="strike" x1="540" y1="20" x2="540" y2="280" stroke-dasharray="3 4"/>
+
+          <!-- right panel: verified -->
+          <text class="k" x="565" y="26" text-anchor="start">OpenShell v0.1.3 verified (PR 280)</text>
+          <rect class="box" x="565" y="60" width="100" height="60" rx="4"/>
+          <text class="t" x="615" y="95" text-anchor="middle">workload</text>
+          <line class="edge" x1="665" y1="90" x2="697" y2="90" marker-end="url(#a3)"/>
+          <text class="m" x="681" y="52" text-anchor="middle">native API</text>
+          <rect class="box" x="697" y="60" width="100" height="60" rx="4"/>
+          <text x="747" y="87" text-anchor="middle">placeholder</text>
+          <text x="747" y="103" text-anchor="middle">credential</text>
+          <line class="edge accent" x1="797" y1="90" x2="829" y2="90" marker-end="url(#a3)"/>
+          <rect class="box accent" x="829" y="60" width="100" height="60" rx="4"/>
+          <text class="a" x="879" y="87" text-anchor="middle">sandbox</text>
+          <text class="a" x="879" y="103" text-anchor="middle">proxy</text>
+          <line class="edge accent" x1="929" y1="90" x2="961" y2="90" marker-end="url(#a3)"/>
+          <text class="m" x="945" y="52" text-anchor="middle">real key</text>
+          <rect class="box" x="961" y="60" width="100" height="60" rx="4"/>
+          <text class="t" x="1011" y="95" text-anchor="middle">provider</text>
+
+          <text x="565" y="160" text-anchor="start">The OpenShell gateway manages sandboxes, providers and policy.</text>
+          <text x="565" y="182" text-anchor="start">The workload selects the model; the proxy only checks policy and swaps the key.</text>
+          <text x="565" y="204" text-anchor="start">Provider and model config stay in the workload, so Gateway.spec.provider stays.</text>
+          <text class="s" x="565" y="240" text-anchor="start">Isolation only applies to sandboxes OpenShell creates. Konveyor creates</text>
+          <text class="s" x="565" y="258" text-anchor="start">Sandbox CRs directly, so it gets none of this today.</text>
+        </svg>
+      </div>
+      <figcaption>Both designs keep the real key out of the workload. What changed is who picks the model and whether Konveyor's Gateway survives: it does, as the model-selection resource, and its provider field is no longer a shim slated for removal. OpenShell adoption stays deferred and still needs its own integration work.</figcaption>
+    </figure>
+    <p class="legend">Sources: docs/adr/0016, 0021 and the PR 280 amendments to 0001, 0004 and 0016; CONTEXT.md entries for Hub, Harness, Gateway and Agent Sandbox.</p>
+  </section>
+</main>
